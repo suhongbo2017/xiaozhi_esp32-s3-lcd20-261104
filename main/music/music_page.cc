@@ -2,13 +2,10 @@
 
 #include <esp_log.h>
 
-#include <cstdio>
-
 #define TAG "MusicPage"
 
 #ifndef HAVE_LVGL
 /* 无 LVGL 的板型（OLED / 无屏）：音乐照常播放，只是没有页面 */
-#include <esp_log.h>
 
 MusicPage::MusicPage(Display* display) : display_(display) {}
 MusicPage::~MusicPage() = default;
@@ -17,17 +14,41 @@ void MusicPage::Destroy() {}
 void MusicPage::Show(const char* title, const char* artist) { (void)title; (void)artist; }
 void MusicPage::SetTitle(const char* title, const char* artist) { (void)title; (void)artist; }
 void MusicPage::SetLyric(const char* prev, const char* current, const char* next) {
-    (void)prev; (void)current; (void)next;
+    (void)prev;
+    (void)current;
+    (void)next;
 }
 void MusicPage::SetProgress(uint32_t pos_ms, uint32_t dur_ms) { (void)pos_ms; (void)dur_ms; }
 void MusicPage::Hide() {}
 
 #else  /* HAVE_LVGL */
 
+#include <cstdio>
+
 #include "lvgl_theme.h"
 
 namespace {
-constexpr uint32_t kCoverSize = 96;
+
+/* ---------------- 版式（240x320 适配） ---------------- */
+constexpr int kCoverSize = 92;
+constexpr int kCoverY = 10;
+constexpr int kTitleY = 112;
+constexpr int kArtistY = 138;
+constexpr int kPrevY = 176;
+constexpr int kCurY = 206;
+constexpr int kNextY = 240;
+constexpr int kBarH = 10;
+constexpr int kBarBottom = 48;
+constexpr int kPad = 10;
+
+/* ---------------- 配色：深蓝渐变底 + 青色强调 ---------------- */
+constexpr uint32_t kBgTop = 0x0E1E33;
+constexpr uint32_t kBgBottom = 0x05090F;
+constexpr uint32_t kAccent = 0x00E5FF; /* 当前歌词 / 进度条 */
+constexpr uint32_t kCoverA = 0x1E88E5; /* 封面渐变起 */
+constexpr uint32_t kCoverB = 0x7C4DFF; /* 封面渐变止 */
+constexpr uint32_t kDim = 0x8FA6BF;    /* 次要文字 */
+constexpr uint32_t kBarBg = 0x1B2C42;
 
 const lv_font_t* TextFont(Display* display) {
     auto theme = dynamic_cast<LvglTheme*>(display->GetTheme());
@@ -48,21 +69,27 @@ const lv_font_t* IconFont(Display* display) {
     return nullptr;
 }
 
-lv_color_t BgColor(Display* display) {
-    auto theme = dynamic_cast<LvglTheme*>(display->GetTheme());
-    return theme ? theme->background_color() : lv_color_hex(0x000000);
-}
-
-lv_color_t FgColor(Display* display) {
-    auto theme = dynamic_cast<LvglTheme*>(display->GetTheme());
-    return theme ? theme->text_color() : lv_color_hex(0xFFFFFF);
-}
-
 void SetFont(lv_obj_t* obj, const lv_font_t* font) {
     if (font != nullptr) {
         lv_obj_set_style_text_font(obj, font, 0);
     }
 }
+
+/* 单行 + 超长省略：保证三行歌词永不重叠 */
+lv_obj_t* MakeLine(lv_obj_t* parent, int width, uint32_t color, lv_opa_t opa, int y,
+                   const lv_font_t* font) {
+    lv_obj_t* label = lv_label_create(parent);
+    lv_obj_set_width(label, width);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_set_style_text_opa(label, opa, 0);
+    SetFont(label, font);
+    lv_label_set_text(label, "");
+    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, y);
+    return label;
+}
+
 }  // namespace
 
 MusicPage::MusicPage(Display* display) : display_(display) {}
@@ -74,99 +101,78 @@ void MusicPage::CreateIfNeeded() {
         return;
     }
 
-    const lv_color_t bg = BgColor(display_);
-    const lv_color_t fg = FgColor(display_);
     const int w = display_->width();
     const int h = display_->height();
+    const int line_w = w - 2 * kPad;
 
+    /* 页面底：竖向渐变，深蓝 → 近黑 */
     root_ = lv_obj_create(lv_screen_active());
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, w, h);
     lv_obj_set_pos(root_, 0, 0);
-    lv_obj_set_style_bg_color(root_, bg, 0);
+    lv_obj_set_style_bg_color(root_, lv_color_hex(kBgTop), 0);
+    lv_obj_set_style_bg_grad_color(root_, lv_color_hex(kBgBottom), 0);
+    lv_obj_set_style_bg_grad_dir(root_, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(root_, 0, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_move_foreground(root_);
 
-    /* 封面占位（后续可替换为真实封面图）*/
+    /* 封面：蓝→紫渐变圆角块 + 音符图标 */
     cover_ = lv_obj_create(root_);
     lv_obj_remove_style_all(cover_);
     lv_obj_set_size(cover_, kCoverSize, kCoverSize);
-    lv_obj_set_style_radius(cover_, 12, 0);
-    lv_obj_set_style_bg_color(cover_, fg, 0);
-    lv_obj_set_style_bg_opa(cover_, LV_OPA_20, 0);
-    lv_obj_align(cover_, LV_ALIGN_TOP_MID, 0, 12);
+    lv_obj_set_style_radius(cover_, 16, 0);
+    lv_obj_set_style_bg_color(cover_, lv_color_hex(kCoverA), 0);
+    lv_obj_set_style_bg_grad_color(cover_, lv_color_hex(kCoverB), 0);
+    lv_obj_set_style_bg_grad_dir(cover_, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(cover_, LV_OPA_COVER, 0);
+    lv_obj_align(cover_, LV_ALIGN_TOP_MID, 0, kCoverY);
 
     cover_icon_ = lv_label_create(cover_);
     lv_label_set_text(cover_icon_, LV_SYMBOL_AUDIO);
-    lv_obj_set_style_text_color(cover_icon_, fg, 0);
+    lv_obj_set_style_text_color(cover_icon_, lv_color_hex(0xFFFFFF), 0);
     SetFont(cover_icon_, IconFont(display_));
     lv_obj_center(cover_icon_);
 
+    /* 标题：单行跑马灯 */
     title_label_ = lv_label_create(root_);
+    lv_obj_set_width(title_label_, line_w);
     lv_label_set_long_mode(title_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_width(title_label_, w - 16);
     lv_obj_set_style_text_align(title_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label_, fg, 0);
+    lv_obj_set_style_text_color(title_label_, lv_color_hex(0xFFFFFF), 0);
     SetFont(title_label_, TextFont(display_));
     lv_label_set_text(title_label_, "");
-    lv_obj_align(title_label_, LV_ALIGN_TOP_MID, 0, kCoverSize + 20);
+    lv_obj_align(title_label_, LV_ALIGN_TOP_MID, 0, kTitleY);
 
-    artist_label_ = lv_label_create(root_);
-    lv_label_set_long_mode(artist_label_, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(artist_label_, w - 16);
-    lv_obj_set_style_text_align(artist_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(artist_label_, fg, 0);
-    lv_obj_set_style_text_opa(artist_label_, LV_OPA_70, 0);
-    SetFont(artist_label_, TextFont(display_));
-    lv_label_set_text(artist_label_, "");
-    lv_obj_align_to(artist_label_, title_label_, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+    /* 歌手 + 三行歌词：固定 y、单行省略 */
+    artist_label_ = MakeLine(root_, line_w, kDim, LV_OPA_90, kArtistY, TextFont(display_));
+    lyric_prev_ = MakeLine(root_, line_w, kDim, LV_OPA_60, kPrevY, TextFont(display_));
+    lyric_cur_ = MakeLine(root_, line_w, kAccent, LV_OPA_COVER, kCurY, TextFont(display_));
+    lyric_next_ = MakeLine(root_, line_w, kDim, LV_OPA_60, kNextY, TextFont(display_));
 
-    /* 三行歌词：上一句 / 当前句 / 下一句 */
-    lyric_prev_ = lv_label_create(root_);
-    lv_label_set_long_mode(lyric_prev_, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(lyric_prev_, w - 12);
-    lv_obj_set_style_text_align(lyric_prev_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(lyric_prev_, fg, 0);
-    lv_obj_set_style_text_opa(lyric_prev_, LV_OPA_50, 0);
-    SetFont(lyric_prev_, TextFont(display_));
-    lv_label_set_text(lyric_prev_, "");
-    lv_obj_align(lyric_prev_, LV_ALIGN_TOP_MID, 0, kCoverSize + 76);
-
-    lyric_cur_ = lv_label_create(root_);
-    lv_label_set_long_mode(lyric_cur_, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(lyric_cur_, w - 12);
-    lv_obj_set_style_text_align(lyric_cur_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(lyric_cur_, fg, 0);
-    SetFont(lyric_cur_, TextFont(display_));
-    lv_label_set_text(lyric_cur_, "");
-    lv_obj_align(lyric_cur_, LV_ALIGN_TOP_MID, 0, kCoverSize + 104);
-
-    lyric_next_ = lv_label_create(root_);
-    lv_label_set_long_mode(lyric_next_, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(lyric_next_, w - 12);
-    lv_obj_set_style_text_align(lyric_next_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(lyric_next_, fg, 0);
-    lv_obj_set_style_text_opa(lyric_next_, LV_OPA_50, 0);
-    SetFont(lyric_next_, TextFont(display_));
-    lv_label_set_text(lyric_next_, "");
-    lv_obj_align(lyric_next_, LV_ALIGN_TOP_MID, 0, kCoverSize + 150);
-
-    /* 进度条 + 时间 */
+    /* 进度条：加粗 10px、圆角、青色指示器 */
     bar_ = lv_bar_create(root_);
-    lv_obj_set_size(bar_, w - 32, 6);
+    lv_obj_remove_style_all(bar_);
+    lv_obj_set_size(bar_, line_w, kBarH);
     lv_bar_set_range(bar_, 0, 1000);
     lv_bar_set_value(bar_, 0, LV_ANIM_OFF);
-    lv_obj_align(bar_, LV_ALIGN_BOTTOM_MID, 0, -28);
+    lv_obj_set_style_bg_color(bar_, lv_color_hex(kBarBg), 0);
+    lv_obj_set_style_bg_opa(bar_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(bar_, kBarH / 2, 0);
+    lv_obj_set_style_bg_color(bar_, lv_color_hex(kAccent), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar_, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar_, kBarH / 2, LV_PART_INDICATOR);
+    lv_obj_align(bar_, LV_ALIGN_BOTTOM_MID, 0, -kBarBottom);
 
+    /* 时间 */
     time_label_ = lv_label_create(root_);
-    lv_obj_set_style_text_color(time_label_, fg, 0);
-    lv_obj_set_style_text_opa(time_label_, LV_OPA_70, 0);
+    lv_obj_set_style_text_color(time_label_, lv_color_hex(kDim), 0);
     SetFont(time_label_, TextFont(display_));
     lv_label_set_text(time_label_, "00:00 / 00:00");
-    lv_obj_align(time_label_, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_align(time_label_, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-    ESP_LOGI(TAG, "music page created (%dx%d)", w, h);
+    ESP_LOGI(TAG, "music page created (%dx%d, bar=%dpx)", w, h, kBarH);
 }
 
 void MusicPage::Destroy() {
@@ -185,7 +191,11 @@ void MusicPage::Show(const char* title, const char* artist) {
     }
     DisplayLockGuard lock(display_);
     CreateIfNeeded();
-    SetTitle(title, artist);
+    if (root_ == nullptr) {
+        return;
+    }
+    lv_label_set_text(title_label_, title != nullptr ? title : "");
+    lv_label_set_text(artist_label_, artist != nullptr ? artist : "");
 }
 
 void MusicPage::SetTitle(const char* title, const char* artist) {
@@ -227,8 +237,10 @@ void MusicPage::SetProgress(uint32_t pos_ms, uint32_t dur_ms) {
     }
     char buf[32];
     snprintf(buf, sizeof(buf), "%02lu:%02lu / %02lu:%02lu",
-             static_cast<unsigned long>(pos_ms / 60000), static_cast<unsigned long>((pos_ms / 1000) % 60),
-             static_cast<unsigned long>(dur_ms / 60000), static_cast<unsigned long>((dur_ms / 1000) % 60));
+             static_cast<unsigned long>(pos_ms / 60000),
+             static_cast<unsigned long>((pos_ms / 1000) % 60),
+             static_cast<unsigned long>(dur_ms / 60000),
+             static_cast<unsigned long>((dur_ms / 1000) % 60));
     lv_label_set_text(time_label_, buf);
 }
 
