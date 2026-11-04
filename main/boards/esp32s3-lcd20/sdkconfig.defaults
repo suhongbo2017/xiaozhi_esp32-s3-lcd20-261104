@@ -1,0 +1,13 @@
+# ESP32-S3 LCD20 (esp32s3-lcd20)
+# 2.0 寸 240x320 ST7789 SPI 屏 + ES8311 codec，16MB Flash / 8MB 八线 PSRAM
+#
+# 构建：python scripts/build.py esp32s3-lcd20 --name esp32s3-lcd20
+
+CONFIG_BOARD_TYPE_ESP32S3_LCD20=y
+CONFIG_LCD_ST7789_240X320=y
+
+# 本机为八线(Octal) PSRAM 模组（启动日志可见 octal_psram 8MB）。
+# 由 sdkconfig.defaults.esp32s3 提供的 OCT 默认值即正确，这里显式声明以免被误改。
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y

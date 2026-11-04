@@ -1,0 +1,12 @@
+{
+    "type": "esp32s3-lcd20",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "esp32s3-lcd20",
+            "sdkconfig_append": [
+                "CONFIG_LCD_ST7789_240X320=y"
+            ]
+        }
+    ]
+}
