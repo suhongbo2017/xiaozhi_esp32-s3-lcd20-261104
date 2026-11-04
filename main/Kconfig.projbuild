@@ -6,6 +6,15 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config MUSIC_SELFTEST_URL
+    string "Music bring-up self-test URL (empty = disabled)"
+    default ""
+    help
+        Bring-up aid: when non-empty, the device plays this OGG/Opus stream once,
+        ~15s after boot, with a synthetic lyric timeline. Used to validate the
+        whole music chain (HTTP fetch -> demux -> decode -> lyric page) without
+        needing an MCP client. Leave empty for production builds.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE

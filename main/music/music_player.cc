@@ -7,9 +7,11 @@
 #include "notify/notify_player.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 
 #define TAG "MusicPlayer"
@@ -132,6 +134,41 @@ void MusicPlayer::Initialize() {
         });
 
     ESP_LOGI(TAG, "music MCP tools registered");
+
+    /* ---- bring-up 自检：CONFIG_MUSIC_SELFTEST_URL 非空时，开机 15s 后自动播一次 ---- */
+    if (strlen(CONFIG_MUSIC_SELFTEST_URL) > 0) {
+        esp_timer_create_args_t args = {
+            .callback = [](void*) {
+                MusicTrack track;
+                track.id = "selftest";
+                track.title = "自检音轨";
+                track.artist = "LCD20 bring-up";
+                track.url = CONFIG_MUSIC_SELFTEST_URL;
+                track.duration_ms = 24000;
+                /* 合成歌词时间轴：验证"到点切行"和 UI 渲染 */
+                track.lyrics = {
+                    {0, "第一句：链路自检开始"},
+                    {8000, "第二句：HTTP 取流 + Opus 解码"},
+                    {16000, "第三句：歌词与进度同步"},
+                };
+                /* 必须在主任务里操作状态机/音频服务 */
+                Application::GetInstance().Schedule([track]() {
+                    ESP_LOGI(TAG, "self-test: playing %s", track.url.c_str());
+                    MusicPlayer::GetInstance().SetPlaylist({track});
+                    MusicPlayer::GetInstance().PlayIndex(0);
+                });
+            },
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "music_selftest",
+            .skip_unhandled_events = true,
+        };
+        esp_timer_handle_t timer = nullptr;
+        if (esp_timer_create(&args, &timer) == ESP_OK) {
+            esp_timer_start_once(timer, 15 * 1000 * 1000);
+            ESP_LOGW(TAG, "music self-test armed: %s", CONFIG_MUSIC_SELFTEST_URL);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -363,6 +400,8 @@ void MusicPlayer::UpdateLyricLocked(uint32_t position_ms, bool force) {
         return;
     }
     lyric_index_ = index;
+    ESP_LOGI(TAG, "lyric[%d] @%lu ms: %s", index, static_cast<unsigned long>(position_ms),
+             (index >= 0) ? current_.lyrics[index].text.c_str() : "(前奏)");
 
     auto* page = static_cast<MusicPage*>(page_);
     if (page == nullptr || display_mode_ == 2) {
@@ -403,10 +442,20 @@ void MusicPlayer::OnFinished(uint32_t playback_id, bool success) {
         playing_ = false;
         lyric_index_ = -1;
     }
-    /* 自动播下一首（有列表时），否则收掉音乐页 */
-    if (!Next()) {
-        HidePage();
+    /* 自动播下一首：列表里有多首才继续，单曲播完就收尾（避免无限循环） */
+    size_t track_count;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        track_count = playlist_.size();
     }
+    if (track_count > 1 && Next()) {
+        return;
+    }
+    HidePage();
+    /* 播完/失败都要把设备状态从 notifying 收回 idle（否则后续请求全被 device busy 拒绝） */
+    Application::GetInstance().Schedule([]() {
+        Application::GetInstance().StopMusic();
+    });
 }
 
 void MusicPlayer::OnEngineStopped() {

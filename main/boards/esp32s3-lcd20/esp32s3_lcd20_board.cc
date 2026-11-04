@@ -51,16 +51,19 @@ private:
         i2c_bus_cfg.flags = { .enable_internal_pullup = 1 };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
 
-        esp_err_t err = i2c_master_probe(i2c_bus_, AUDIO_CODEC_ES8311_ADDR, 100);
+        /* i2c_master_probe() 需要 7bit 地址；AUDIO_CODEC_ES8311_ADDR 是 8bit 形式（0x30 → 0x18） */
+        const uint8_t probe_addr = static_cast<uint8_t>(AUDIO_CODEC_ES8311_ADDR >> 1);
+        esp_err_t err = i2c_master_probe(i2c_bus_, probe_addr, 100);
         if (err == ESP_OK) {
             codec_present_ = true;
-            ESP_LOGI(TAG, "ES8311 found at 0x%02X", AUDIO_CODEC_ES8311_ADDR);
+            ESP_LOGI(TAG, "ES8311 found at 7bit 0x%02X (8bit 0x%02X)", probe_addr,
+                     AUDIO_CODEC_ES8311_ADDR);
             return;
         }
 
         codec_present_ = false;
-        ESP_LOGW(TAG, "ES8311 not found at 0x%02X (%s), audio falls back to dummy codec",
-                 AUDIO_CODEC_ES8311_ADDR, esp_err_to_name(err));
+        ESP_LOGW(TAG, "ES8311 not found at 7bit 0x%02X / 8bit 0x%02X (%s), audio falls back to dummy codec",
+                 probe_addr, AUDIO_CODEC_ES8311_ADDR, esp_err_to_name(err));
 
         /* 帮助定位接线问题：扫描 0x08~0x77，把命中的地址全部打印出来 */
         for (uint8_t addr = 0x08; addr < 0x78; addr++) {
