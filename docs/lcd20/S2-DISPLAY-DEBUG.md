@@ -38,3 +38,32 @@
 2. 4s~7s（背光强制拉低）与 7s~10s（强制拉高）屏幕明暗是否有变化？
 3. 旧固件（音乐固件）时期屏幕是否显示过内容？
 4. 2.0 寸屏模块的接线：CS / RES / DC / SDA(MOSI) / SCL(CLK) / BLK / VCC / GND 分别接哪个 GPIO？
+
+---
+
+## 结论（2026-11-04 更新）：黑屏 = 引脚定义错误
+
+用户提供的实机接线：`BLK45 / CS15 / DC7 / RES6 / SDA(MOSI)5 / SCL(CLK)4 / VCC 3.3V`。
+之前用的是仓库里 `bread-compact-wifi-lcd` 的默认引脚（47/21/40/45/41），与实际接线完全不符 → 自然全黑。
+
+改为实际接线后：**屏幕点亮，显示小智 emoji 图标，音乐页正常**。
+
+### 附带的两处调整
+
+1. **诊断模式看不到纯色**：`lv_obj_set_style_bg_color(lv_screen_active(), …)` 被 LcdDisplay 的 UI 层
+   （全屏容器 + 主题背景）遮住，所以诊断固件只在"背光/无 UI"时才有效。
+   结论：`CONFIG_LCD20_DIAG_MODE` 保留但仅用于背光排查；显示是否点亮直接看 UI 更快。
+2. **音频引脚全部让位**（屏幕占用 4/5/6/7/15/45）：
+
+   | 功能 | 新 GPIO |
+   |---|---|
+   | ES8311 I2C SDA / SCL | 1 / 2 |
+   | I2S MCLK / BCLK / WS / DOUT / DIN | 3 / 8 / 9 / 10 / 11 |
+   | PA 使能（NS4150B SD） | 12 |
+
+### 串口口位变更
+设备原生 USB（COM15）不再枚举，现由 **CH343 → COM14** 承担控制台/烧录。
+`idf.py -p COM14 flash` 已验证可用。
+
+### 显示参数（沿用，观感正确）
+`INVERT_COLOR=true`、`MIRROR_X/Y=false`、`SWAP_XY=false`、`SPI mode 0`、`40MHz`、`240x320`。
