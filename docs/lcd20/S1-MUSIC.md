@@ -123,6 +123,13 @@ MCP self.music.*  ──►  MusicPlayer（业务层：曲库/歌词/UI）
 | 7.4 | 歌词只跟着进度走，长句换行依赖 `LONG_WRAP` | 视实际歌词观感微调 |
 | 7.5 | 播放期间上行语音关闭（同 notify 语义），不能边放边对话 | 若要做"边听边说"需 AEC 参考声道（S2 音频硬件到位后评估） |
 | 7.6 | 音量仍走 `self.audio_speaker.set_volume` | 可在音乐页加音量控件（可选） |
+| 7.7 | **无 LVGL 的板型**（OLED/无屏）`music_page` 走空实现 stub：音乐照常播放，只是不显示页面 | 已验证编译期用 `HAVE_LVGL` 分流 |
+
+### 构建流程注意（踩坑）
+- **构建必须前台执行**：用 `nohup ... &` 后台跑 `powershell -File tools/build-board.ps1` 会偶发在 CMake configure 阶段静默退出（日志停在 “Generated default assets flash configured”，无错误、无产物更新）。
+  前台执行（`powershell ... -File tools/build-board.ps1 ...` 直接等待）稳定，退出码 0 且日志出现 `Project build complete`。
+- 判定“构建是否真的成功”要看三样：退出码、`Project build complete` 出现次数、`build/xiaozhi.bin` 时间戳与
+  `esptool image-info` 的 `Checksum/Hash valid`。
 
 ## 8. 下一步
 

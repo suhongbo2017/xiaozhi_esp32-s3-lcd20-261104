@@ -1,12 +1,30 @@
 #include "music_page.h"
 
-#include "lvgl_theme.h"
-
 #include <esp_log.h>
 
 #include <cstdio>
 
 #define TAG "MusicPage"
+
+#ifndef HAVE_LVGL
+/* 无 LVGL 的板型（OLED / 无屏）：音乐照常播放，只是没有页面 */
+#include <esp_log.h>
+
+MusicPage::MusicPage(Display* display) : display_(display) {}
+MusicPage::~MusicPage() = default;
+void MusicPage::CreateIfNeeded() {}
+void MusicPage::Destroy() {}
+void MusicPage::Show(const char* title, const char* artist) { (void)title; (void)artist; }
+void MusicPage::SetTitle(const char* title, const char* artist) { (void)title; (void)artist; }
+void MusicPage::SetLyric(const char* prev, const char* current, const char* next) {
+    (void)prev; (void)current; (void)next;
+}
+void MusicPage::SetProgress(uint32_t pos_ms, uint32_t dur_ms) { (void)pos_ms; (void)dur_ms; }
+void MusicPage::Hide() {}
+
+#else  /* HAVE_LVGL */
+
+#include "lvgl_theme.h"
 
 namespace {
 constexpr uint32_t kCoverSize = 96;
@@ -221,3 +239,5 @@ void MusicPage::Hide() {
     DisplayLockGuard lock(display_);
     Destroy();
 }
+
+#endif  // HAVE_LVGL

@@ -1,10 +1,11 @@
 #ifndef MUSIC_PAGE_H
 #define MUSIC_PAGE_H
 
-#include "display.h"
+#include "display.h"  /* 注意：display.h 内部按需定义 HAVE_LVGL 并引入 lvgl.h */
 
 #include <cstdint>
 
+#ifdef HAVE_LVGL
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -12,6 +13,7 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+#endif /* HAVE_LVGL */
 
 /**
  * 音乐播放页（240x320 友好）。
@@ -32,13 +34,18 @@ public:
     void SetProgress(uint32_t pos_ms, uint32_t dur_ms);
     void SetTitle(const char* title, const char* artist);
     void Hide();
+#ifdef HAVE_LVGL
     bool visible() const { return root_ != nullptr; }
+#else
+    bool visible() const { return false; }
+#endif
 
 private:
     void CreateIfNeeded();
     void Destroy();
 
     Display* display_ = nullptr;
+#ifdef HAVE_LVGL
     lv_obj_t* root_ = nullptr;
     lv_obj_t* cover_ = nullptr;
     lv_obj_t* cover_icon_ = nullptr;
@@ -49,6 +56,7 @@ private:
     lv_obj_t* lyric_next_ = nullptr;
     lv_obj_t* bar_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
+#endif
 };
 
 #endif  // MUSIC_PAGE_H
