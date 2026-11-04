@@ -6,6 +6,14 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config LCD20_DIAG_MODE
+    bool "LCD20 bring-up diagnostics (backlight + solid color sweep)"
+    default n
+    help
+        Bring-up aid for the esp32s3-lcd20 board. Drives the backlight pin with
+        several polarities and sweeps solid colors on the panel, logging each
+        phase, so a black screen can be localised (backlight vs panel vs LVGL).
+
 config MUSIC_SELFTEST_URL
     string "Music bring-up self-test URL (empty = disabled)"
     default ""

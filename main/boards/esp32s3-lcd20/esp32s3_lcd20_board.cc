@@ -21,6 +21,7 @@
 #include "config.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include "lvgl_display/lvgl_theme.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_io.h>
@@ -28,6 +29,8 @@
 #include <esp_lcd_panel_vendor.h>
 #include <driver/spi_common.h>
 #include <driver/i2c_master.h>
+#include <driver/gpio.h>
+#include <esp_timer.h>
 
 #define TAG "Esp32S3Lcd20Board"
 
@@ -135,6 +138,64 @@ private:
         static LampController lamp(LAMP_GPIO);
     }
 
+#ifdef CONFIG_LCD20_DIAG_MODE
+    /* ---------------- bring-up 诊断：定位黑屏是背光 / 面板 / LVGL ---------------- */
+    void StartDiagnostics() {
+        auto& app = Application::GetInstance();
+        static int phase = 0;
+        static const uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF};  /* R G B W */
+        static const char* names[] = {"RED", "GREEN", "BLUE", "WHITE"};
+
+        esp_timer_create_args_t args = {
+            .callback = [](void*) {
+                auto& app2 = Application::GetInstance();
+                auto* display = Board::GetInstance().GetDisplay();
+                phase++;
+                if (phase == 1) {
+                    ESP_LOGW(TAG, "DIAG 1/5: backlight PWM 100%% (normal polarity)");
+                    Board::GetInstance().GetBacklight()->SetBrightness(100, true);
+                } else if (phase == 3) {
+                    ESP_LOGW(TAG, "DIAG 2/5: backlight pin forced LOW (3s)");
+                    gpio_reset_pin(DISPLAY_BACKLIGHT_PIN);
+                    gpio_set_direction(DISPLAY_BACKLIGHT_PIN, GPIO_MODE_OUTPUT);
+                    gpio_set_level(DISPLAY_BACKLIGHT_PIN, 0);
+                } else if (phase == 6) {
+                    ESP_LOGW(TAG, "DIAG 3/5: backlight pin forced HIGH (3s)");
+                    gpio_set_level(DISPLAY_BACKLIGHT_PIN, 1);
+                } else if (phase == 9) {
+                    ESP_LOGW(TAG, "DIAG 4/5: restore PWM 100%%");
+                    auto* bl = Board::GetInstance().GetBacklight();
+                    if (bl) {
+                        bl->SetBrightness(100, true);
+                    }
+                } else if (phase >= 10) {
+                    int i = (phase - 10) / 3 % 4;
+                    ESP_LOGW(TAG, "DIAG 5/5: screen bg -> %s (color #%d)", names[i], i);
+                    if (display != nullptr) {
+                        DisplayLockGuard lock(display);
+                        lv_obj_t* scr = lv_screen_active();
+                        lv_obj_set_style_bg_color(scr, lv_color_hex(
+                            i == 0 ? 0xFF0000 : i == 1 ? 0x00FF00 : i == 2 ? 0x0000FF : 0xFFFFFF), 0);
+                        lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+                    }
+                    (void)colors;
+                }
+                (void)app2;
+            },
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "lcd20_diag",
+            .skip_unhandled_events = true,
+        };
+        esp_timer_handle_t timer = nullptr;
+        if (esp_timer_create(&args, &timer) == ESP_OK) {
+            esp_timer_start_periodic(timer, 1000 * 1000);
+            ESP_LOGW(TAG, "DIAG: display diagnostics started (backlight pin=%d)", DISPLAY_BACKLIGHT_PIN);
+        }
+        (void)app;
+    }
+#endif
+
 public:
     Esp32S3Lcd20Board() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
@@ -145,6 +206,9 @@ public:
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }
+#ifdef CONFIG_LCD20_DIAG_MODE
+        StartDiagnostics();
+#endif
     }
 
     virtual Led* GetLed() override {
