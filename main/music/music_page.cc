@@ -151,6 +151,11 @@ void MusicPage::CreateIfNeeded() {
     lyric_cur_ = MakeLine(root_, line_w, kAccent, LV_OPA_COVER, kCurY, TextFont(display_));
     lyric_next_ = MakeLine(root_, line_w, kDim, LV_OPA_60, kNextY, TextFont(display_));
 
+    /* 当前行：超长时横向跑马灯滚动（首尾相接），短句则静止居中 */
+    lv_label_set_long_mode(lyric_cur_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(lyric_cur_, 6000, 0);   /* 一轮 6s，长句不至于太快 */
+    lv_obj_set_style_pad_column(lyric_cur_, 24, 0);        /* 循环首尾留 24px 间隔 */
+
     /* 进度条：加粗 10px、圆角、青色指示器 */
     bar_ = lv_bar_create(root_);
     lv_obj_remove_style_all(bar_);

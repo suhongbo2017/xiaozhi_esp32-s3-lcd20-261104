@@ -21,6 +21,9 @@
 #include "config.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include "music/music_player.h"
+
+#include <memory>
 #include "lvgl_display/lvgl_theme.h"
 
 #include <esp_log.h>
@@ -66,6 +69,8 @@ private:
 class Esp32S3Lcd20Board : public WifiBoard {
 private:
     Button boot_button_;
+    std::unique_ptr<Button> next_button_;
+    std::unique_ptr<Button> prev_button_;
     LcdDisplay* display_ = nullptr;
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     bool codec_present_ = false;
@@ -167,6 +172,28 @@ private:
         static LampController lamp(LAMP_GPIO);
     }
 
+    /* 可选实体切歌键：按钮另一端接 GND，内部上拉，按下为低电平 */
+    void InitializeMusicButtons() {
+        if (MUSIC_NEXT_BUTTON_GPIO != GPIO_NUM_NC) {
+            next_button_ = std::unique_ptr<Button>(new Button(MUSIC_NEXT_BUTTON_GPIO));
+            next_button_->OnClick([]() {
+                /* 按键回调可能不在主任务，切歌必须投递到主任务 */
+                Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Next(); });
+            });
+            next_button_->OnDoubleClick([]() {
+                Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Stop(); });
+            });
+            ESP_LOGI(TAG, "music next button: GPIO%d (click=next, double=stop)", MUSIC_NEXT_BUTTON_GPIO);
+        }
+        if (MUSIC_PREV_BUTTON_GPIO != GPIO_NUM_NC) {
+            prev_button_ = std::unique_ptr<Button>(new Button(MUSIC_PREV_BUTTON_GPIO));
+            prev_button_->OnClick([]() {
+                Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Prev(); });
+            });
+            ESP_LOGI(TAG, "music prev button: GPIO%d (click=prev)", MUSIC_PREV_BUTTON_GPIO);
+        }
+    }
+
 #ifdef CONFIG_LCD20_DIAG_MODE
     /* ---------------- bring-up 诊断：定位黑屏是背光 / 面板 / LVGL ---------------- */
     void StartDiagnostics() {
@@ -232,6 +259,7 @@ public:
         InitializeLcdDisplay();
         InitializeButtons();
         InitializeTools();
+        InitializeMusicButtons();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }

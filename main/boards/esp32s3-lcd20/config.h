@@ -55,6 +55,15 @@
 /* 板载“灯”执行器（继电器 / MOS 管），对外暴露 self.lamp.* 三个 MCP 工具 */
 #define LAMP_GPIO GPIO_NUM_18
 
+/* ---------------- 实体切歌按键（可选，默认不启用） ----------------
+ * 接法：按键一端接该 GPIO，另一端接 GND（内部上拉，按下=低电平）。
+ * 改完这里重新 build + flash 即生效；保持 GPIO_NUM_NC 表示不启用。
+ * 建议用空闲脚：13 / 14 / 16 / 17 / 21 / 38 / 39 / 40 / 41 / 42 / 47
+ * 已占用：0( BOOT) 1,2(I2C) 3,8,9,10,11(I2S) 4,5,6,7,15,45(LCD) 12(PA) 18(LAMP) 19,20(USB) 26~37(Flash/PSRAM) 43,44(UART0) 48(LED)
+ */
+#define MUSIC_NEXT_BUTTON_GPIO GPIO_NUM_NC   /* 单击=下一首，双击=停止 */
+#define MUSIC_PREV_BUTTON_GPIO GPIO_NUM_NC   /* 单击=上一首 */
+
 /* ---------------- 2.0 inch 240x320 LCD（SPI3，背光 PWM 可调） ----------------
  * 实机接线（用户提供，2026-11-04）：
  *   BLK  → GPIO45      CS   → GPIO15     DC   → GPIO7

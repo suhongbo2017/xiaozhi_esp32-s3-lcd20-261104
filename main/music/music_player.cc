@@ -302,7 +302,27 @@ bool MusicPlayer::Next() {
         if (playlist_.empty()) {
             return false;
         }
-        index = (current_index_ == SIZE_MAX) ? 0 : (current_index_ + 1) % playlist_.size();
+        if (!playing_ || current_index_ == SIZE_MAX) {
+            index = 0;                                   /* 未播放：从第一首开始 */
+        } else {
+            index = (current_index_ + 1) % playlist_.size();
+        }
+    }
+    return PlayIndex(index);
+}
+
+bool MusicPlayer::Prev() {
+    size_t index;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (playlist_.empty()) {
+            return false;
+        }
+        if (!playing_ || current_index_ == SIZE_MAX) {
+            index = 0;
+        } else {
+            index = (current_index_ + playlist_.size() - 1) % playlist_.size();
+        }
     }
     return PlayIndex(index);
 }

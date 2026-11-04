@@ -56,6 +56,8 @@ public:
     bool PlayTrack(const MusicTrack& track);
     void Stop();
     bool Next();
+    /** 上一首；未在播放时从头/尾开始播（实体按键用） */
+    bool Prev();
 
     /* ---- 状态 ---- */
     bool playing() const;
