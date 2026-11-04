@@ -67,3 +67,26 @@
 
 ### 显示参数（沿用，观感正确）
 `INVERT_COLOR=true`、`MIRROR_X/Y=false`、`SWAP_XY=false`、`SPI mode 0`、`40MHz`、`240x320`。
+
+---
+
+## 追加修复：音乐页只显示 3 秒就消失（无音频硬件时的节奏问题）
+
+**现象**：自检播放 24s 的曲子，音乐页不到 3 秒就消失。
+
+**根因**：`DummyAudioCodec::Write()` 立即返回，播放队列被瞬间抽干 —— 24s 音频 3.7s 就"播完"，
+进度/歌词时间轴被压缩约 6~8 倍。真实 codec（ES8311）是靠 I2S DMA 阻塞形成节拍的，dummy 没有节拍。
+
+**修复**：板级新增 `PacedDummyAudioCodec`（继承 `DummyAudioCodec`，覆盖私有的 `Write`），
+按 `output_sample_rate` 把 Write 阻塞对应时长，模拟 DAC 节拍。只在音频硬件未安装时使用，
+装上 ES8311 后走 `Es8311AudioCodec`，本类不参与。（不动仓库共享的 `dummy_audio_codec.cc`）
+
+**验证（串口实录，时间轴完全对上）**：
+```
+I (16261) MusicPlayer: playing '自检音轨' - 'LCD20 bring-up'
+I (16381) lyric[0] @0 ms      第一句
+I (24381) lyric[1] @8000 ms   第二句   ← 距开始 8.0s
+I (32381) lyric[2] @16000 ms  第三句   ← 距开始 16.0s
+I (40401) playback finished (ok)        ← 距开始 24.0s
+I (40401) StateMachine: notifying -> idle
+```

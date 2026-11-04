@@ -31,8 +31,37 @@
 #include <driver/i2c_master.h>
 #include <driver/gpio.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define TAG "Esp32S3Lcd20Board"
+
+/**
+ * 音频硬件未安装时的"实时速率"假 codec。
+ *
+ * DummyAudioCodec::Write() 立即返回，导致播放队列被瞬间抽干：一段 24s 的音频
+ * 3~4s 就"播完"（音乐页一闪而过、歌词节奏被压缩）。这里按输出采样率把 Write
+ * 阻塞相应时长，模拟真实 DAC 的节拍，让无硬件阶段也能验证 UI/歌词/进度。
+ * 装上 ES8311 后走 Es8311AudioCodec（真实 I2S 阻塞），本类不再参与。
+ */
+class PacedDummyAudioCodec : public DummyAudioCodec {
+public:
+    PacedDummyAudioCodec(int input_sample_rate, int output_sample_rate)
+        : DummyAudioCodec(input_sample_rate, output_sample_rate) {}
+
+private:
+    int Write(const int16_t* data, int samples) override {
+        (void)data;
+        if (samples > 0 && output_sample_rate_ > 0 && output_channels_ > 0) {
+            const int frames = samples / output_channels_;
+            const int64_t us = static_cast<int64_t>(frames) * 1000000 / output_sample_rate_;
+            if (us > 0) {
+                vTaskDelay(pdMS_TO_TICKS((us + 999) / 1000));
+            }
+        }
+        return samples;
+    }
+};
 
 class Esp32S3Lcd20Board : public WifiBoard {
 private:
@@ -227,8 +256,8 @@ public:
                 AUDIO_INPUT_REFERENCE);
             return &audio_codec;
         }
-        /* 音频未安装 / 未接线：降级为 dummy，保证系统其余功能可用 */
-        static DummyAudioCodec audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
+        /* 音频未安装 / 未接线：降级为"按实时速率消费"的 dummy，保证系统可用且节奏正确 */
+        static PacedDummyAudioCodec audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
         return &audio_codec;
     }
 
