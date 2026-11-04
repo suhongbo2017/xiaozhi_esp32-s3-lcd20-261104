@@ -5,6 +5,7 @@
 #include "board.h"
 #include "display.h"
 #include "mcp_server.h"
+#include "music/music_player.h"
 #include "mqtt_protocol.h"
 #include "settings.h"
 #include "system_info.h"
@@ -87,6 +88,7 @@ void Application::Initialize() {
     };
     callbacks.on_playback_progress = [this](uint32_t playback_id, uint32_t media_position_ms) {
         notify_player_.OnPlaybackProgress(playback_id, media_position_ms);
+        MusicPlayer::GetInstance().OnProgress(playback_id, media_position_ms);
     };
     audio_service_.SetCallbacks(callbacks);
 
@@ -102,6 +104,9 @@ void Application::Initialize() {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
+
+    /* 音乐模块：注册 self.music.* 工具（无硬件依赖） */
+    MusicPlayer::GetInstance().Initialize();
 
     // Set network event callback for UI updates and network state handling
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
@@ -1125,8 +1130,67 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
 void Application::StopNotification() {
     notify_player_.Stop();
     audio_service_.ResetDecoder();
+    /* 音乐也跑在同一条引擎上：被唤醒词等外部原因打断时同步收尾 UI */
+    MusicPlayer::GetInstance().OnEngineStopped();
     auto& board = Board::GetInstance();
     board.GetDisplay()->SetChatMessage("assistant", "");
+    board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+    if (GetDeviceState() == kDeviceStateNotifying) {
+        SetDeviceState(kDeviceStateIdle);
+    }
+}
+
+bool Application::StartMusic(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics) {
+    if (audio_url.empty()) {
+        return false;
+    }
+    if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
+        ESP_LOGW(TAG, "Ignoring music request while device is busy");
+        return false;
+    }
+
+    auto& board = Board::GetInstance();
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+    audio_service_.ReleaseWakeWordResources();
+    while (audio_service_.PopPacketFromSendQueue()) {
+        /* Discard microphone audio left over from a previous conversation. */
+    }
+
+    if (!SetDeviceState(kDeviceStateNotifying)) {
+        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        return false;
+    }
+
+    audio_service_.ResetDecoder();
+    uint32_t playback_id = ++notification_playback_id_;
+    if (playback_id == 0) {
+        playback_id = ++notification_playback_id_;
+    }
+
+    bool started = notify_player_.Start(
+        audio_url, std::vector<NotifySubtitle>(lyrics), playback_id,
+        nullptr,  /* 歌词由 MusicPlayer 按进度驱动，不使用字幕回调 */
+        [](uint32_t id, bool success) {
+            MusicPlayer::GetInstance().OnFinished(id, success);
+        });
+
+    if (!started) {
+        ESP_LOGE(TAG, "Failed to start music playback");
+        StopMusic();
+        return false;
+    }
+    ESP_LOGI(TAG, "Music playback started, playback_id=%lu",
+             static_cast<unsigned long>(playback_id));
+    return true;
+}
+
+void Application::StopMusic() {
+    notify_player_.Stop();
+    audio_service_.ResetDecoder();
+    MusicPlayer::GetInstance().OnEngineStopped();
+    auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
     if (GetDeviceState() == kDeviceStateNotifying) {
         SetDeviceState(kDeviceStateIdle);

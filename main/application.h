@@ -97,6 +97,13 @@ public:
     void ToggleChatState();
 
     /**
+     * 音乐播放（复用 NotifyPlayer 引擎：HTTP 流 + 时间轴歌词字幕）。
+     * 需求设备处于 idle；内部会把状态切到 notifying，唤醒词可自然打断。
+     */
+    bool StartMusic(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics);
+    void StopMusic();
+
+    /**
      * Start listening (event-based, thread-safe)
      * Sends MAIN_EVENT_START_LISTENING to be handled in Run()
      */
@@ -171,6 +178,7 @@ private:
     void ConfigureWakeWordForListening();
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
     void StopNotification();
+
     void HandleNotificationFinished(uint32_t playback_id, bool success);
 
     // Activation task (runs in background)
