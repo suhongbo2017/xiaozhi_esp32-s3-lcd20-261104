@@ -1,0 +1,12 @@
+{
+  "latest": {
+    "enabled": true,
+    "version": "2.5.0",
+    "file": "xiaozhi_lcd20_2.5.0.bin",
+    "force": 0,
+    "https": false,
+    "base_url": null
+  },
+  "mqtt": null,
+  "websocket": null
+}

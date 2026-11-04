@@ -1,0 +1,8 @@
+{
+  "_comment": "Per-device release override. Key = Client-Id (board UUID) or Device-Id (MAC). Example:",
+  "_example_faf666c4-1577-4b5a-8e1c-495e31a7b1e0": {
+    "version": "2.5.1",
+    "file": "xiaozhi_lcd20_2.5.1.bin",
+    "force": 1
+  }
+}
