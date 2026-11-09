@@ -15,35 +15,36 @@
  * 以及屏幕 40/41/45/47/21、背光 42、状态灯 48、LAMP 18。
  */
 
-/* ---------------- 音频：ES8311（I2S 双工） ---------------- */
+/* ---------------- 音频：NS4168 I2S 功放 + PDM 数字麦克风 ----------------
+ * 模块实测型号（2026-11-04 拍照确认）：
+ *   - 功放：NS4168（I2S 数字输入 D 类功放，自带扬声器座子，无 I2C、无需 MCLK）
+ *     丝印分组 SPK：LRCLK / BCLK / SDA(=SDATA，即 I2S 数据输入)
+ *   - 麦克风：板载 MEMS PDM 麦（HT33）
+ *     丝印分组 MIC：CLK（PDM 时钟，ESP 输出）/ DATA（PDM 数据，ESP 输入）
+ *
+ * 因此本板走「标准 I2S 输出 + PDM 输入」= NoAudioCodecSimplexPdm，
+ * 不需要 ES8311/ES8388 那类 I2C 控制总线。
+ */
 #define AUDIO_INPUT_SAMPLE_RATE  16000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
 
-/* ES8311 需要 MCLK + 双工 I2S，故不定义 AUDIO_I2S_METHOD_SIMPLEX */
-#define AUDIO_I2S_GPIO_MCLK    GPIO_NUM_3
-#define AUDIO_I2S_GPIO_BCLK    GPIO_NUM_8
-#define AUDIO_I2S_GPIO_WS      GPIO_NUM_9
-#define AUDIO_I2S_GPIO_DOUT    GPIO_NUM_10
-#define AUDIO_I2S_GPIO_DIN     GPIO_NUM_11
+/* 扬声器侧：标准 I2S（ESP32 → NS4168） */
+#define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_8    /* → 模块 BCLK */
+#define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_9    /* → 模块 LRCLK */
+#define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_10   /* → 模块 SDA/SDATA */
 
-/* 未装 codec 时的降级路径（NoAudioCodecSimplex 需要的宏，保持与仓库约定一致） */
-#define AUDIO_I2S_MIC_GPIO_WS   GPIO_NUM_9
-#define AUDIO_I2S_MIC_GPIO_SCK  GPIO_NUM_8
-#define AUDIO_I2S_MIC_GPIO_DIN  GPIO_NUM_11
-#define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_10
-#define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_8
-#define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_9
+/* 麦克风侧：PDM（ESP32 → 模块 CLK，模块 DATA → ESP32） */
+#define AUDIO_PDM_MIC_GPIO_CLK  GPIO_NUM_3    /* → 模块 MIC CLK */
+#define AUDIO_PDM_MIC_GPIO_DIN  GPIO_NUM_11   /* ← 模块 MIC DATA */
 
-/* ES8311 I2C 控制总线 */
-#define AUDIO_CODEC_I2C_SDA_PIN GPIO_NUM_1
-#define AUDIO_CODEC_I2C_SCL_PIN GPIO_NUM_2
+/* 兼容仓库里 NoAudioCodecSimplex 的宏命名（本板不使用 I2S 麦，仅占位） */
+#define AUDIO_I2S_MIC_GPIO_WS   AUDIO_PDM_MIC_GPIO_CLK
+#define AUDIO_I2S_MIC_GPIO_SCK  AUDIO_PDM_MIC_GPIO_CLK
+#define AUDIO_I2S_MIC_GPIO_DIN  AUDIO_PDM_MIC_GPIO_DIN
 
-/* ES8311 PA 使能（接 NS4150B SD 脚） */
-#define AUDIO_CODEC_PA_PIN GPIO_NUM_12
-#define AUDIO_CODEC_ES8311_ADDR ES8311_CODEC_DEFAULT_ADDR  /* AD0=GND → 0x18 */
-
-/* 单麦，无回采参考声道（后续做打断时再打开） */
-#define AUDIO_INPUT_REFERENCE    false
+/* 无 codec 芯片、无 I2C、无 PA 使能脚 */
+#define AUDIO_CODEC_PA_PIN      GPIO_NUM_NC
+#define AUDIO_INPUT_REFERENCE   false
 
 /* ---------------- 按键 / 灯 ---------------- */
 #define BUILTIN_LED_GPIO        GPIO_NUM_48
