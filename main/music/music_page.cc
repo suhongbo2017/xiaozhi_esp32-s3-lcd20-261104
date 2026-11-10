@@ -13,10 +13,13 @@ void MusicPage::CreateIfNeeded() {}
 void MusicPage::Destroy() {}
 void MusicPage::Show(const char* title, const char* artist) { (void)title; (void)artist; }
 void MusicPage::SetTitle(const char* title, const char* artist) { (void)title; (void)artist; }
-void MusicPage::SetLyric(const char* prev, const char* current, const char* next) {
-    (void)prev;
+void MusicPage::SetLyric(const char* prev2, const char* prev1, const char* current, const char* next1,
+                         const char* next2) {
+    (void)prev2;
+    (void)prev1;
     (void)current;
-    (void)next;
+    (void)next1;
+    (void)next2;
 }
 void MusicPage::SetProgress(uint32_t pos_ms, uint32_t dur_ms) { (void)pos_ms; (void)dur_ms; }
 void MusicPage::Hide() {}
@@ -29,26 +32,36 @@ void MusicPage::Hide() {}
 
 namespace {
 
-/* ---------------- 版式（240x320 适配） ---------------- */
-constexpr int kCoverSize = 92;
-constexpr int kCoverY = 10;
-constexpr int kTitleY = 112;
-constexpr int kArtistY = 138;
-constexpr int kPrevY = 176;
-constexpr int kCurY = 206;
-constexpr int kNextY = 240;
-constexpr int kBarH = 10;
-constexpr int kBarBottom = 48;
-constexpr int kPad = 10;
+/* ---------------- 版式（240x320，20px 中文字体） ----------------
+ * 顶部：小封面 + 标题/歌手（一行）
+ * 中部：五行歌词，当前行高亮且允许两行折行
+ * 底部：加粗进度条 + 时间
+ */
+constexpr int kCoverSize = 56;
+constexpr int kCoverX = 8;
+constexpr int kCoverY = 6;
+constexpr int kTextX = 72;
 
-/* ---------------- 配色：深蓝渐变底 + 青色强调 ---------------- */
+constexpr int kPrev2Y = 76;
+constexpr int kPrev1Y = 102;
+constexpr int kCurY = 132;
+constexpr int kCurH = 48;      /* 两行 */
+constexpr int kNext1Y = 186;
+constexpr int kNext2Y = 212;
+
+constexpr int kBarH = 12;
+constexpr int kBarBottom = 52;
+constexpr int kPad = 8;
+
+/* 配色：深蓝渐变底 + 青色强调 */
 constexpr uint32_t kBgTop = 0x0E1E33;
 constexpr uint32_t kBgBottom = 0x05090F;
-constexpr uint32_t kAccent = 0x00E5FF; /* 当前歌词 / 进度条 */
-constexpr uint32_t kCoverA = 0x1E88E5; /* 封面渐变起 */
-constexpr uint32_t kCoverB = 0x7C4DFF; /* 封面渐变止 */
-constexpr uint32_t kDim = 0x8FA6BF;    /* 次要文字 */
+constexpr uint32_t kAccent = 0x00E5FF;
+constexpr uint32_t kCoverA = 0x1E88E5;
+constexpr uint32_t kCoverB = 0x7C4DFF;
+constexpr uint32_t kDim = 0x8FA6BF;
 constexpr uint32_t kBarBg = 0x1B2C42;
+constexpr uint32_t kLine = 0x22364F;
 
 const lv_font_t* TextFont(Display* display) {
     auto theme = dynamic_cast<LvglTheme*>(display->GetTheme());
@@ -75,18 +88,17 @@ void SetFont(lv_obj_t* obj, const lv_font_t* font) {
     }
 }
 
-/* 单行 + 超长省略：保证三行歌词永不重叠 */
-lv_obj_t* MakeLine(lv_obj_t* parent, int width, uint32_t color, lv_opa_t opa, int y,
-                   const lv_font_t* font) {
+lv_obj_t* MakeLyricLine(lv_obj_t* parent, int x, int y, int w, uint32_t color, lv_opa_t opa,
+                        const lv_font_t* font) {
     lv_obj_t* label = lv_label_create(parent);
-    lv_obj_set_width(label, width);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(label, x, y);
+    lv_obj_set_width(label, w);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);   /* 单行，超长省略 */
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_set_style_text_opa(label, opa, 0);
     SetFont(label, font);
     lv_label_set_text(label, "");
-    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, y);
     return label;
 }
 
@@ -105,7 +117,7 @@ void MusicPage::CreateIfNeeded() {
     const int h = display_->height();
     const int line_w = w - 2 * kPad;
 
-    /* 页面底：竖向渐变，深蓝 → 近黑 */
+    /* 页面底：竖向渐变 */
     root_ = lv_obj_create(lv_screen_active());
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, w, h);
@@ -118,16 +130,16 @@ void MusicPage::CreateIfNeeded() {
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_move_foreground(root_);
 
-    /* 封面：蓝→紫渐变圆角块 + 音符图标 */
+    /* 小封面（左上） */
     cover_ = lv_obj_create(root_);
     lv_obj_remove_style_all(cover_);
     lv_obj_set_size(cover_, kCoverSize, kCoverSize);
-    lv_obj_set_style_radius(cover_, 16, 0);
+    lv_obj_set_pos(cover_, kCoverX, kCoverY);
+    lv_obj_set_style_radius(cover_, 12, 0);
     lv_obj_set_style_bg_color(cover_, lv_color_hex(kCoverA), 0);
     lv_obj_set_style_bg_grad_color(cover_, lv_color_hex(kCoverB), 0);
     lv_obj_set_style_bg_grad_dir(cover_, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(cover_, LV_OPA_COVER, 0);
-    lv_obj_align(cover_, LV_ALIGN_TOP_MID, 0, kCoverY);
 
     cover_icon_ = lv_label_create(cover_);
     lv_label_set_text(cover_icon_, LV_SYMBOL_AUDIO);
@@ -135,28 +147,50 @@ void MusicPage::CreateIfNeeded() {
     SetFont(cover_icon_, IconFont(display_));
     lv_obj_center(cover_icon_);
 
-    /* 标题：单行跑马灯 */
+    /* 标题 + 歌手（封面右侧，两行） */
     title_label_ = lv_label_create(root_);
-    lv_obj_set_width(title_label_, line_w);
+    lv_obj_set_pos(title_label_, kTextX, 8);
+    lv_obj_set_width(title_label_, w - kTextX - 8);
     lv_label_set_long_mode(title_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_align(title_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(title_label_, lv_color_hex(0xFFFFFF), 0);
     SetFont(title_label_, TextFont(display_));
     lv_label_set_text(title_label_, "");
-    lv_obj_align(title_label_, LV_ALIGN_TOP_MID, 0, kTitleY);
 
-    /* 歌手 + 三行歌词：固定 y、单行省略 */
-    artist_label_ = MakeLine(root_, line_w, kDim, LV_OPA_90, kArtistY, TextFont(display_));
-    lyric_prev_ = MakeLine(root_, line_w, kDim, LV_OPA_60, kPrevY, TextFont(display_));
-    lyric_cur_ = MakeLine(root_, line_w, kAccent, LV_OPA_COVER, kCurY, TextFont(display_));
-    lyric_next_ = MakeLine(root_, line_w, kDim, LV_OPA_60, kNextY, TextFont(display_));
+    artist_label_ = lv_label_create(root_);
+    lv_obj_set_pos(artist_label_, kTextX, 36);
+    lv_obj_set_width(artist_label_, w - kTextX - 8);
+    lv_label_set_long_mode(artist_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_color(artist_label_, lv_color_hex(kDim), 0);
+    SetFont(artist_label_, TextFont(display_));
+    lv_label_set_text(artist_label_, "");
 
-    /* 当前行：超长时横向跑马灯滚动（首尾相接），短句则静止居中 */
-    lv_label_set_long_mode(lyric_cur_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_anim_duration(lyric_cur_, 6000, 0);   /* 一轮 6s，长句不至于太快 */
-    lv_obj_set_style_pad_column(lyric_cur_, 24, 0);        /* 循环首尾留 24px 间隔 */
+    /* 分隔线 */
+    lv_obj_t* divider = lv_obj_create(root_);
+    lv_obj_remove_style_all(divider);
+    lv_obj_set_size(divider, line_w, 1);
+    lv_obj_set_pos(divider, kPad, 70);
+    lv_obj_set_style_bg_color(divider, lv_color_hex(kLine), 0);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
 
-    /* 进度条：加粗 10px、圆角、青色指示器 */
+    /* 五行歌词 */
+    const auto* font = TextFont(display_);
+    lyric_prev2_ = MakeLyricLine(root_, kPad, kPrev2Y, line_w, kDim, LV_OPA_40, font);
+    lyric_prev1_ = MakeLyricLine(root_, kPad, kPrev1Y, line_w, kDim, LV_OPA_70, font);
+
+    /* 当前行：允许折行（最多两行），高亮 */
+    lyric_cur_ = lv_label_create(root_);
+    lv_obj_set_pos(lyric_cur_, kPad, kCurY);
+    lv_obj_set_size(lyric_cur_, line_w, kCurH);
+    lv_label_set_long_mode(lyric_cur_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(lyric_cur_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(lyric_cur_, lv_color_hex(kAccent), 0);
+    SetFont(lyric_cur_, font);
+    lv_label_set_text(lyric_cur_, "");
+
+    lyric_next1_ = MakeLyricLine(root_, kPad, kNext1Y, line_w, kDim, LV_OPA_70, font);
+    lyric_next2_ = MakeLyricLine(root_, kPad, kNext2Y, line_w, kDim, LV_OPA_40, font);
+
+    /* 进度条 */
     bar_ = lv_bar_create(root_);
     lv_obj_remove_style_all(bar_);
     lv_obj_set_size(bar_, line_w, kBarH);
@@ -173,11 +207,11 @@ void MusicPage::CreateIfNeeded() {
     /* 时间 */
     time_label_ = lv_label_create(root_);
     lv_obj_set_style_text_color(time_label_, lv_color_hex(kDim), 0);
-    SetFont(time_label_, TextFont(display_));
+    SetFont(time_label_, font);
     lv_label_set_text(time_label_, "00:00 / 00:00");
-    lv_obj_align(time_label_, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_obj_align(time_label_, LV_ALIGN_BOTTOM_MID, 0, -20);
 
-    ESP_LOGI(TAG, "music page created (%dx%d, bar=%dpx)", w, h, kBarH);
+    ESP_LOGI(TAG, "music page created (%dx%d, 5-line lyrics)", w, h);
 }
 
 void MusicPage::Destroy() {
@@ -186,7 +220,7 @@ void MusicPage::Destroy() {
         root_ = nullptr;
     }
     cover_ = cover_icon_ = title_label_ = artist_label_ = nullptr;
-    lyric_prev_ = lyric_cur_ = lyric_next_ = nullptr;
+    lyric_prev2_ = lyric_prev1_ = lyric_cur_ = lyric_next1_ = lyric_next2_ = nullptr;
     bar_ = time_label_ = nullptr;
 }
 
@@ -215,7 +249,8 @@ void MusicPage::SetTitle(const char* title, const char* artist) {
     lv_label_set_text(artist_label_, artist != nullptr ? artist : "");
 }
 
-void MusicPage::SetLyric(const char* prev, const char* current, const char* next) {
+void MusicPage::SetLyric(const char* prev2, const char* prev1, const char* current, const char* next1,
+                         const char* next2) {
     if (display_ == nullptr) {
         return;
     }
@@ -223,9 +258,11 @@ void MusicPage::SetLyric(const char* prev, const char* current, const char* next
     if (root_ == nullptr) {
         return;
     }
-    lv_label_set_text(lyric_prev_, prev != nullptr ? prev : "");
+    lv_label_set_text(lyric_prev2_, prev2 != nullptr ? prev2 : "");
+    lv_label_set_text(lyric_prev1_, prev1 != nullptr ? prev1 : "");
     lv_label_set_text(lyric_cur_, current != nullptr ? current : "");
-    lv_label_set_text(lyric_next_, next != nullptr ? next : "");
+    lv_label_set_text(lyric_next1_, next1 != nullptr ? next1 : "");
+    lv_label_set_text(lyric_next2_, next2 != nullptr ? next2 : "");
 }
 
 void MusicPage::SetProgress(uint32_t pos_ms, uint32_t dur_ms) {

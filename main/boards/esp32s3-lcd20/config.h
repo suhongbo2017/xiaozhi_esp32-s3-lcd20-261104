@@ -64,6 +64,8 @@
  */
 #define MUSIC_NEXT_BUTTON_GPIO GPIO_NUM_NC   /* 单击=下一首，双击=停止 */
 #define MUSIC_PREV_BUTTON_GPIO GPIO_NUM_NC   /* 单击=上一首 */
+/* 专用“停止/打断”键（可选）：按下立即停止音乐播放 */
+#define MUSIC_STOP_BUTTON_GPIO GPIO_NUM_NC
 
 /* ---------------- 2.0 inch 240x320 LCD（SPI3，背光 PWM 可调） ----------------
  * 实机接线（用户提供，2026-11-04）：

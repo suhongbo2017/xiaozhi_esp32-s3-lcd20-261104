@@ -153,9 +153,10 @@ bool MusicPlayer::PlayTrack(const MusicTrack& track) {
     }
 
     auto& app = Application::GetInstance();
+    /* 注意：不要在这里做 idle 硬校验。语音点歌时设备通常处于 speaking/listening，
+     * 由 Application::StartMusic() 负责中断当前播报并切回 idle。 */
     if (app.GetDeviceState() != kDeviceStateIdle) {
-        ESP_LOGW(TAG, "device busy (state=%d), music ignored", static_cast<int>(app.GetDeviceState()));
-        return false;
+        ESP_LOGI(TAG, "music requested in state %d (will preempt)", static_cast<int>(app.GetDeviceState()));
     }
 
     /* 歌词转成 NotifyPlayer 的时间轴字幕，交给它做“到点回调” */
@@ -384,7 +385,7 @@ void MusicPlayer::EnsurePage() {
     }
     page->Show(track.title.c_str(), track.artist.c_str());
     if (mode == 0) {
-        page->SetLyric("", track.lyrics.empty() ? "" : "", "");
+        page->SetLyric("", "", track.lyrics.empty() ? "" : "", "", "");
     }
     page->SetProgress(0, track.duration_ms);
 }
@@ -429,12 +430,14 @@ void MusicPlayer::UpdateLyricLocked(uint32_t position_ms, bool force) {
         return;
     }
 
-    const char* prev = (index > 0) ? current_.lyrics[index - 1].text.c_str() : "";
-    const char* cur = (index >= 0) ? current_.lyrics[index].text.c_str() : "";
-    const char* next = (index >= 0 && static_cast<size_t>(index) + 1 < current_.lyrics.size())
-                           ? current_.lyrics[index + 1].text.c_str()
-                           : "";
-    page->SetLyric(prev, cur, next);
+    auto text_at = [this](int i) -> const char* {
+        if (i < 0 || static_cast<size_t>(i) >= current_.lyrics.size()) {
+            return "";
+        }
+        return current_.lyrics[i].text.c_str();
+    };
+    page->SetLyric(text_at(index - 2), text_at(index - 1), text_at(index), text_at(index + 1),
+                   text_at(index + 2));
     page->SetProgress(position_ms, current_.duration_ms);
 }
 

@@ -102,6 +102,8 @@ public:
      */
     bool StartMusic(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics);
     void StopMusic();
+    /** 真正的启动逻辑（要求状态为 idle） */
+    bool StartMusicNow(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics);
 
     /**
      * Start listening (event-based, thread-safe)
@@ -149,6 +151,13 @@ private:
     AudioService audio_service_;
     NotifyPlayer notify_player_;
     uint32_t notification_playback_id_ = 0;
+
+    /* 非 idle 时被推迟启动的音乐（先中断播报，500ms 后再在主任务启动） */
+    std::string pending_music_url_;
+    std::vector<NotifySubtitle> pending_music_lyrics_;
+    esp_timer_handle_t pending_music_timer_ = nullptr;
+    int music_saved_volume_ = -1;   /* 播放前音量，用于 ducking 恢复 */
+
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;

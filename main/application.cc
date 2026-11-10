@@ -897,6 +897,7 @@ void Application::HandleWakeWordDetectedEvent() {
     if (state == kDeviceStateIdle) {
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateNotifying) {
+        ESP_LOGI(TAG, "Wake word during playback -> stop music and listen");
         StopNotification();
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
@@ -1146,8 +1147,69 @@ bool Application::StartMusic(const std::string& audio_url, const std::vector<Not
     if (audio_url.empty()) {
         return false;
     }
+
+    /* 语音点歌时设备通常处于 speaking / listening，必须先中断当前播报。
+     * 把“中断 + 启动”放在同一次调用里会和正在收尾的 TTS 流水线打架
+     * （实测触发 Interrupt WDT），所以：先中断，500ms 后在主任务里启动。 */
     if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
-        ESP_LOGW(TAG, "Ignoring music request while device is busy");
+        ESP_LOGI(TAG, "Music request in state %d: abort, start in 500ms",
+                 static_cast<int>(GetDeviceState()));
+        pending_music_url_ = audio_url;
+        pending_music_lyrics_ = lyrics;
+
+        auto state = GetDeviceState();
+        if (state == kDeviceStateSpeaking) {
+            AbortSpeaking(kAbortReasonNone);
+        } else if (state == kDeviceStateListening && protocol_ != nullptr) {
+            protocol_->CloseAudioChannel();
+        }
+        if (notify_player_.IsBusy()) {
+            notify_player_.Stop();
+            audio_service_.ResetDecoder();
+        }
+        if (GetDeviceState() != kDeviceStateIdle) {
+            SetDeviceState(kDeviceStateIdle);
+        }
+
+        if (pending_music_timer_ == nullptr) {
+            esp_timer_create_args_t args = {
+                .callback =
+                    [](void* arg) {
+                        auto* app = static_cast<Application*>(arg);
+                        app->Schedule([app]() {
+                            std::string url = app->pending_music_url_;
+                            auto pending_lyrics = app->pending_music_lyrics_;
+                            app->pending_music_url_.clear();
+                            app->pending_music_lyrics_.clear();
+                            if (!url.empty()) {
+                                app->StartMusicNow(url, pending_lyrics);
+                            }
+                        });
+                    },
+                .arg = this,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "pending_music",
+                .skip_unhandled_events = true,
+            };
+            esp_timer_create(&args, &pending_music_timer_);
+        }
+        if (pending_music_timer_ != nullptr) {
+            esp_timer_stop(pending_music_timer_);
+            esp_timer_start_once(pending_music_timer_, 500 * 1000);
+        }
+        return true;
+    }
+
+    return StartMusicNow(audio_url, lyrics);
+}
+
+bool Application::StartMusicNow(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics) {
+    if (audio_url.empty()) {
+        return false;
+    }
+    if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
+        ESP_LOGW(TAG, "StartMusicNow rejected: state=%d busy=%d", static_cast<int>(GetDeviceState()),
+                 notify_player_.IsBusy());
         return false;
     }
 
@@ -1169,6 +1231,18 @@ bool Application::StartMusic(const std::string& audio_url, const std::vector<Not
     uint32_t playback_id = ++notification_playback_id_;
     if (playback_id == 0) {
         playback_id = ++notification_playback_id_;
+    }
+
+    /* 本板无 AEC 参考通道：音乐外放会盖住麦克风，导致唤醒词打断失效。
+     * 播放期间把输出音量降到 CONFIG_MUSIC_DUCK_VOLUME_PERCENT%，停播时恢复。 */
+    if (auto codec = board.GetAudioCodec()) {
+        const int volume = codec->output_volume();
+        const int ducked = volume * CONFIG_MUSIC_DUCK_VOLUME_PERCENT / 100;
+        if (volume > 0 && ducked != volume) {
+            music_saved_volume_ = volume;
+            codec->SetOutputVolume(ducked < 10 ? 10 : ducked);
+            ESP_LOGI(TAG, "Music ducking: volume %d%% -> %d%%", volume, ducked);
+        }
     }
 
     /* 音乐首次点播时服务端可能正在转码，放宽拉流超时到 25s */
@@ -1194,6 +1268,13 @@ bool Application::StartMusic(const std::string& audio_url, const std::vector<Not
 void Application::StopMusic() {
     notify_player_.Stop();
     notify_player_.SetHttpTimeout(5000);   /* 恢复默认，通知/播报用 */
+    if (music_saved_volume_ > 0) {
+        if (auto codec = Board::GetInstance().GetAudioCodec()) {
+            codec->SetOutputVolume(music_saved_volume_);
+            ESP_LOGI(TAG, "Music ducking restored: volume %d%%", music_saved_volume_);
+        }
+        music_saved_volume_ = -1;
+    }
     audio_service_.ResetDecoder();
     MusicPlayer::GetInstance().OnEngineStopped();
     auto& board = Board::GetInstance();

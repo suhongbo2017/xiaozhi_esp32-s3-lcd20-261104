@@ -6,6 +6,16 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config MUSIC_DUCK_VOLUME_PERCENT
+    int "Duck output volume while music plays (percent of current volume)"
+    range 0 100
+    default 60
+    help
+        Music playback masks the microphone (no AEC reference on this board), which
+        makes the wake word hard to detect. During music playback the output volume is
+        scaled to this percentage, so "hi xiaozhi" can still interrupt playback.
+        Set to 100 to disable ducking.
+
 config MUSIC_API_URL
     string "Music/stock API base URL (self-hosted music_server.py)"
     default "http://47.116.199.150:2233"

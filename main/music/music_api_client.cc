@@ -202,11 +202,20 @@ bool MusicApiClient::GetLyrics(const std::string& song_id, std::vector<MusicLyri
     return !out->empty();
 }
 
+std::string MusicApiClient::SignedQuery() const {
+    const int64_t uptime_s = esp_timer_get_time() / 1000000;
+    char ts[24];
+    snprintf(ts, sizeof(ts), "%lld", static_cast<long long>(uptime_s));
+    const std::string key = Sha256Hex32(mac_ + ":" + chip_id_ + ":" + ts + ":" + secret_);
+    return "&mac=" + UrlEncode(mac_) + "&chip=" + UrlEncode(chip_id_) + "&ts=" + ts + "&key=" + key;
+}
+
 std::string MusicApiClient::StreamUrlById(const std::string& song_id) const {
     if (base_url_.empty()) {
         return std::string();
     }
-    return base_url_ + "/stream_ogg?id=" + UrlEncode(song_id);
+    /* NotifyPlayer 拉流时不会带自定义 header，所以把鉴权放到 query 里 */
+    return base_url_ + "/stream_ogg?id=" + UrlEncode(song_id) + SignedQuery();
 }
 
 std::string MusicApiClient::StreamUrlByName(const std::string& song, const std::string& artist) const {
@@ -217,7 +226,7 @@ std::string MusicApiClient::StreamUrlByName(const std::string& song, const std::
     if (!artist.empty()) {
         url += "&artist=" + UrlEncode(artist);
     }
-    return url;
+    return url + SignedQuery();
 }
 
 bool MusicApiClient::StockQuote(const std::string& code, std::string* out_json) {

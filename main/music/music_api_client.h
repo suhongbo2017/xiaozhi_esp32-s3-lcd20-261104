@@ -49,6 +49,10 @@ public:
     std::string StreamUrlById(const std::string& song_id) const;
     std::string StreamUrlByName(const std::string& song, const std::string& artist) const;
 
+    /** 供“无法附加 header 的 HTTP 客户端（NotifyPlayer）”使用的鉴权 query：
+     *  &mac=..&chip=..&ts=..&key=..   */
+    std::string SignedQuery() const;
+
     /* ---- 股票 ---- */
     bool StockQuote(const std::string& code, std::string* out_json);
     bool StockSearch(const std::string& keyword, std::string* out_json);

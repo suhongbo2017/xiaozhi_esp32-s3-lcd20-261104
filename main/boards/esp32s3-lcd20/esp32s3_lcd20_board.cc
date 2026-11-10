@@ -42,6 +42,7 @@ class Esp32S3Lcd20Board : public WifiBoard {
 private:
     Button boot_button_;
     std::unique_ptr<Button> next_button_;
+    std::unique_ptr<Button> stop_button_;
     std::unique_ptr<Button> prev_button_;
     LcdDisplay* display_ = nullptr;
 
@@ -99,7 +100,19 @@ private:
                 EnterWifiConfigMode();
                 return;
             }
+            /* 按键打断：音乐播放中按 BOOT 键立即停止播放 */
+            if (MusicPlayer::GetInstance().playing()) {
+                ESP_LOGI(TAG, "BOOT button: interrupt music playback");
+                Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Stop(); });
+                return;
+            }
             app.ToggleChatState();
+        });
+        boot_button_.OnLongPress([this]() {
+            if (MusicPlayer::GetInstance().playing()) {
+                ESP_LOGI(TAG, "BOOT long press: interrupt music playback");
+                Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Stop(); });
+            }
         });
     }
 
@@ -118,7 +131,18 @@ private:
             next_button_->OnDoubleClick([]() {
                 Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Stop(); });
             });
-            ESP_LOGI(TAG, "music next button: GPIO%d (click=next, double=stop)", MUSIC_NEXT_BUTTON_GPIO);
+            next_button_->OnLongPress([]() {
+                Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Stop(); });
+            });
+            ESP_LOGI(TAG, "music next button: GPIO%d (click=next, double/long=stop)",
+                     MUSIC_NEXT_BUTTON_GPIO);
+        }
+        if (MUSIC_STOP_BUTTON_GPIO != GPIO_NUM_NC) {
+            stop_button_ = std::unique_ptr<Button>(new Button(MUSIC_STOP_BUTTON_GPIO));
+            stop_button_->OnClick([]() {
+                Application::GetInstance().Schedule([]() { MusicPlayer::GetInstance().Stop(); });
+            });
+            ESP_LOGI(TAG, "music stop button: GPIO%d", MUSIC_STOP_BUTTON_GPIO);
         }
         if (MUSIC_PREV_BUTTON_GPIO != GPIO_NUM_NC) {
             prev_button_ = std::unique_ptr<Button>(new Button(MUSIC_PREV_BUTTON_GPIO));

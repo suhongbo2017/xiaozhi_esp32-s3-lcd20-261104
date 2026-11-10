@@ -30,7 +30,9 @@ public:
     ~MusicPage();
 
     void Show(const char* title, const char* artist);
-    void SetLyric(const char* prev, const char* current, const char* next);
+    /** 五行歌词：上上句 / 上一句 / 当前句 / 下一句 / 下下句（可传 nullptr 或空串） */
+    void SetLyric(const char* prev2, const char* prev1, const char* current, const char* next1,
+                  const char* next2);
     void SetProgress(uint32_t pos_ms, uint32_t dur_ms);
     void SetTitle(const char* title, const char* artist);
     void Hide();
@@ -51,9 +53,11 @@ private:
     lv_obj_t* cover_icon_ = nullptr;
     lv_obj_t* title_label_ = nullptr;
     lv_obj_t* artist_label_ = nullptr;
-    lv_obj_t* lyric_prev_ = nullptr;
+    lv_obj_t* lyric_prev2_ = nullptr;
+    lv_obj_t* lyric_prev1_ = nullptr;
     lv_obj_t* lyric_cur_ = nullptr;
-    lv_obj_t* lyric_next_ = nullptr;
+    lv_obj_t* lyric_next1_ = nullptr;
+    lv_obj_t* lyric_next2_ = nullptr;
     lv_obj_t* bar_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
 #endif
