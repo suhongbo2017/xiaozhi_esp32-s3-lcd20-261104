@@ -15,6 +15,9 @@
 #include "oled_display.h"
 #include "board.h"
 #include "led/single_led.h"
+
+#include <led_strip.h>
+#include <driver/gpio.h>
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
@@ -118,6 +121,100 @@ void McpServer::AddCommonTools() {
                 /* 先关掉状态灯自动模式，再熄灭；否则紧接着的状态变化会把它重新点亮 */
                 led->SetStatusEnabled(false);
                 led->TurnOff();
+                return true;
+            });
+
+        AddTool("self.led.test",
+            "Self-test the onboard RGB LED: cycles RED -> GREEN -> BLUE -> OFF, 2 seconds each, "
+            "2 rounds. Use it when the user reports the LED does not respond.",
+            PropertyList(),
+            [led](const PropertyList&) -> ReturnValue {
+                led->SetStatusEnabled(false);
+                static esp_timer_handle_t timer = nullptr;
+                static int step = 0;
+                if (timer == nullptr) {
+                    esp_timer_create_args_t args = {
+                        .callback =
+                            [](void* arg) {
+                                auto* l = static_cast<Led*>(arg);
+                                const int s = step++ % 4;
+                                switch (s) {
+                                    case 0: l->SetColor(64, 0, 0); l->TurnOn(); break;
+                                    case 1: l->SetColor(0, 64, 0); l->TurnOn(); break;
+                                    case 2: l->SetColor(0, 0, 64); l->TurnOn(); break;
+                                    default: l->TurnOff(); break;
+                                }
+                                ESP_LOGW(TAG, "LED test step %d", s);
+                            },
+                        .arg = led,
+                        .dispatch_method = ESP_TIMER_TASK,
+                        .name = "led_test",
+                        .skip_unhandled_events = true,
+                    };
+                    esp_timer_create(&args, &timer);
+                }
+                step = 0;
+                esp_timer_stop(timer);
+                esp_timer_start_periodic(timer, 2 * 1000 * 1000);
+                return true;
+            });
+
+        AddTool("self.led.scan_pin",
+            "Scan candidate GPIOs for the onboard WS2812: every 3 seconds it drives the next pin with "
+            "a GREEN pulse and logs the pin number. Watch the LED and tell which moment it lights up. "
+            "Use when the user says the onboard LED cannot be controlled.",
+            PropertyList(),
+            [](const PropertyList&) -> ReturnValue {
+                static esp_timer_handle_t scan_timer = nullptr;
+                static int scan_step = 0;
+                static led_strip_handle_t scan_strip = nullptr;
+                static const gpio_num_t candidates[] = {
+                    GPIO_NUM_48, GPIO_NUM_38, GPIO_NUM_47, GPIO_NUM_21,
+                    GPIO_NUM_14,  GPIO_NUM_13, GPIO_NUM_12, GPIO_NUM_11,
+                };
+                static constexpr int kCount = sizeof(candidates) / sizeof(candidates[0]);
+
+                if (scan_timer == nullptr) {
+                    esp_timer_create_args_t args = {
+                        .callback =
+                            [](void*) {
+                                if (scan_strip != nullptr) {
+                                    led_strip_del(scan_strip);
+                                    scan_strip = nullptr;
+                                }
+                                if (scan_step >= kCount) {
+                                    ESP_LOGW(TAG, "LED scan finished");
+                                    esp_timer_stop(scan_timer);
+                                    return;
+                                }
+                                gpio_num_t pin = candidates[scan_step];
+                                led_strip_config_t cfg = {};
+                                cfg.strip_gpio_num = pin;
+                                cfg.max_leds = 1;
+                                cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
+                                cfg.led_model = LED_MODEL_WS2812;
+                                led_strip_rmt_config_t rmt = {};
+                                rmt.resolution_hz = 10 * 1000 * 1000;
+                                esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &scan_strip);
+                                if (err == ESP_OK && scan_strip != nullptr) {
+                                    led_strip_set_pixel(scan_strip, 0, 0, 64, 0);
+                                    led_strip_refresh(scan_strip);
+                                }
+                                ESP_LOGW(TAG, "LED scan step %d: GPIO%d -> %s", scan_step, (int)pin,
+                                         esp_err_to_name(err));
+                                scan_step++;
+                            },
+                        .arg = nullptr,
+                        .dispatch_method = ESP_TIMER_TASK,
+                        .name = "led_scan",
+                        .skip_unhandled_events = true,
+                    };
+                    esp_timer_create(&args, &scan_timer);
+                }
+                scan_step = 0;
+                esp_timer_stop(scan_timer);
+                esp_timer_start_periodic(scan_timer, 3 * 1000 * 1000);
+                ESP_LOGW(TAG, "LED pin scan started (8 candidates, 3s each)");
                 return true;
             });
 

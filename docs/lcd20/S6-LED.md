@@ -66,3 +66,27 @@ I (1218658) StateMachine: State: speaking -> listening   ← 又被点亮
 NVS 保存；`OnStateChanged()` 在关闭时直接 `TurnOff()` 并返回。
 
 工具总数 18 → **24**。
+
+---
+
+## 结论（2026-11-10 收尾）：确实关掉了，是固件行为，且已持久化
+
+串口实录：
+```
+I (22438) SingleLed: status LED auto mode -> off          ← 你那次"把板载灯关掉"生效，写入 NVS(led/status_enabled=0)
+I (1196)  SingleLed: status LED disabled by user setting  ← 之后每次重启都会读到这个设置
+I (1197)  SingleLed: status LED disabled by user setting
+（之后每次状态变化只打印 TurnOff clear=ESP_OK，灯保持熄灭）
+```
+
+即：
+1. `self.led.turn_off` 关闭了"状态灯自动模式"并把开关**写入 NVS**；
+2. 之后每次开机都会读到 `status_enabled=0`，从一开始就不点灯；
+3. 每次状态变化都会再执行一次 `TurnOff`（幂等），所以灯一直是灭的。
+
+`self.led.scan_pin` 没有被调用过（日志无 `LED scan step`），所以不是扫描工具顺手关的。
+
+**恢复状态灯**：说「恢复板载灯状态指示」→ `self.led.set_status_enabled {enabled:true}`
+（会写回 NVS=1，重启后保持）。
+
+**顺带优化**：`TurnOn/TurnOff` 的日志从 INFO 降为 DEBUG（之前每次状态变化都刷一行，日志体积暴涨）。

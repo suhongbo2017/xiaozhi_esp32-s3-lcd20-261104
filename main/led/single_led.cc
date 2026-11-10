@@ -74,8 +74,10 @@ void SingleLed::TurnOn() {
     
     std::lock_guard<std::mutex> lock(mutex_);
     esp_timer_stop(blink_timer_);
-    led_strip_set_pixel(led_strip_, 0, r_, g_, b_);
-    led_strip_refresh(led_strip_);
+    esp_err_t e1 = led_strip_set_pixel(led_strip_, 0, r_, g_, b_);
+    esp_err_t e2 = led_strip_refresh(led_strip_);
+    ESP_LOGD(TAG, "TurnOn rgb=(%u,%u,%u) set=%s refresh=%s", r_, g_, b_, esp_err_to_name(e1),
+             esp_err_to_name(e2));
 }
 
 void SingleLed::TurnOff() {
@@ -85,7 +87,8 @@ void SingleLed::TurnOff() {
 
     std::lock_guard<std::mutex> lock(mutex_);
     esp_timer_stop(blink_timer_);
-    led_strip_clear(led_strip_);
+    esp_err_t e = led_strip_clear(led_strip_);
+    ESP_LOGD(TAG, "TurnOff clear=%s", esp_err_to_name(e));
 }
 
 void SingleLed::SetStatusEnabled(bool enabled) {
