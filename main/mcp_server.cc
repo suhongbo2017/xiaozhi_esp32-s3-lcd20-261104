@@ -91,6 +91,8 @@ void McpServer::AddCommonTools() {
                 Property("b", kPropertyTypeInteger, 0, 255),
             }),
             [led](const PropertyList& properties) -> ReturnValue {
+                /* 手动设色：同时关闭"状态灯自动模式"，否则下一次对话状态变化会把颜色改掉 */
+                led->SetStatusEnabled(false);
                 led->SetColor(static_cast<uint8_t>(properties["r"].value<int>()),
                               static_cast<uint8_t>(properties["g"].value<int>()),
                               static_cast<uint8_t>(properties["b"].value<int>()));
@@ -103,6 +105,7 @@ void McpServer::AddCommonTools() {
             "Use self.led.set_color to pick a color instead.",
             PropertyList(),
             [led](const PropertyList&) -> ReturnValue {
+                led->SetStatusEnabled(false);
                 led->SetColor(0, 0, 8);
                 led->TurnOn();
                 return true;
@@ -112,7 +115,19 @@ void McpServer::AddCommonTools() {
             "Turn off the onboard RGB LED. It will stay off until the next device state change.",
             PropertyList(),
             [led](const PropertyList&) -> ReturnValue {
+                /* 先关掉状态灯自动模式，再熄灭；否则紧接着的状态变化会把它重新点亮 */
+                led->SetStatusEnabled(false);
                 led->TurnOff();
+                return true;
+            });
+
+        AddTool("self.led.set_status_enabled",
+            "Enable or disable the onboard LED automatic status mode. When disabled, the LED no longer "
+            "follows device states (listening=red, speaking=green, idle=off) and stays as manually set "
+            "(off by default). Set true to restore automatic status indication.",
+            PropertyList({Property("enabled", kPropertyTypeBoolean)}),
+            [led](const PropertyList& properties) -> ReturnValue {
+                led->SetStatusEnabled(properties["enabled"].value<bool>());
                 return true;
             });
     }

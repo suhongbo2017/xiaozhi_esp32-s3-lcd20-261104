@@ -19,11 +19,14 @@ public:
 
     /* 手动控制（MCP self.led.* 用）。注意：下一次设备状态变化会覆盖手动颜色 */
     bool SupportsColor() const override { return true; }
+    void SetStatusEnabled(bool enabled) override;
+    bool StatusEnabled() const override { return status_enabled_; }
     void SetColor(uint8_t r, uint8_t g, uint8_t b) override;
     void TurnOn() override;
     void TurnOff() override;
 
 private:
+    bool status_enabled_ = true;   /* false = 不再跟随设备状态点灯（用户手动控制） */
     std::mutex mutex_;
     TaskHandle_t blink_task_ = nullptr;
     led_strip_handle_t led_strip_ = nullptr;

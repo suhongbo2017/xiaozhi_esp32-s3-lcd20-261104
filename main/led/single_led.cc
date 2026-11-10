@@ -1,5 +1,6 @@
 #include "single_led.h"
 #include "application.h"
+#include "settings.h"
 #include <esp_log.h> 
 
 #define TAG "SingleLed"
@@ -28,6 +29,14 @@ SingleLed::SingleLed(gpio_num_t gpio) {
 
     ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_));
     led_strip_clear(led_strip_);
+
+    {
+        Settings settings("led", false);
+        status_enabled_ = settings.GetInt("status_enabled", 1) != 0;
+        if (!status_enabled_) {
+            ESP_LOGI(TAG, "status LED disabled by user setting");
+        }
+    }
 
     esp_timer_create_args_t blink_timer_args = {
         .callback = [](void *arg) {
@@ -79,6 +88,22 @@ void SingleLed::TurnOff() {
     led_strip_clear(led_strip_);
 }
 
+void SingleLed::SetStatusEnabled(bool enabled) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (status_enabled_ == enabled) {
+            return;
+        }
+        status_enabled_ = enabled;
+    }
+    Settings settings("led", true);
+    settings.SetInt("status_enabled", enabled ? 1 : 0);
+    ESP_LOGI(TAG, "status LED auto mode -> %s", enabled ? "on" : "off");
+    if (!enabled) {
+        TurnOff();
+    }
+}
+
 void SingleLed::BlinkOnce() {
     Blink(1, 100);
 }
@@ -121,6 +146,10 @@ void SingleLed::OnBlinkTimer() {
 
 
 void SingleLed::OnStateChanged() {
+    if (!status_enabled_) {
+        TurnOff();   /* 用户已手动关闭状态灯：任何状态变化都不再点灯 */
+        return;
+    }
     auto& app = Application::GetInstance();
     auto device_state = app.GetDeviceState();
     switch (device_state) {
