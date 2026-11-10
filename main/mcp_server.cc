@@ -14,6 +14,7 @@
 #include "display.h"
 #include "oled_display.h"
 #include "board.h"
+#include "led/single_led.h"
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
@@ -73,6 +74,45 @@ void McpServer::AddCommonTools() {
             [backlight](const PropertyList& properties) -> ReturnValue {
                 uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
                 backlight->SetBrightness(brightness, true);
+                return true;
+            });
+    }
+
+    /* 板载可控彩灯（WS2812）：self.led.* —— 仅在 LED 支持颜色时注册 */
+    auto led = board.GetLed();
+    if (led != nullptr && led->SupportsColor()) {
+        AddTool("self.led.set_color",
+            "Set the onboard RGB LED color. Provide r/g/b in 0-255. "
+            "Note: the LED is also used as a status light, so the next device state change "
+            "(listening/speaking/idle) will override this color.",
+            PropertyList({
+                Property("r", kPropertyTypeInteger, 0, 255),
+                Property("g", kPropertyTypeInteger, 0, 255),
+                Property("b", kPropertyTypeInteger, 0, 255),
+            }),
+            [led](const PropertyList& properties) -> ReturnValue {
+                led->SetColor(static_cast<uint8_t>(properties["r"].value<int>()),
+                              static_cast<uint8_t>(properties["g"].value<int>()),
+                              static_cast<uint8_t>(properties["b"].value<int>()));
+                led->TurnOn();
+                return true;
+            });
+
+        AddTool("self.led.turn_on",
+            "Turn the onboard RGB LED on (it will be lit white-ish at low brightness). "
+            "Use self.led.set_color to pick a color instead.",
+            PropertyList(),
+            [led](const PropertyList&) -> ReturnValue {
+                led->SetColor(0, 0, 8);
+                led->TurnOn();
+                return true;
+            });
+
+        AddTool("self.led.turn_off",
+            "Turn off the onboard RGB LED. It will stay off until the next device state change.",
+            PropertyList(),
+            [led](const PropertyList&) -> ReturnValue {
+                led->TurnOff();
                 return true;
             });
     }

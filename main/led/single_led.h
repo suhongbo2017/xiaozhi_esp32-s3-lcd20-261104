@@ -17,6 +17,12 @@ public:
 
     void OnStateChanged() override;
 
+    /* 手动控制（MCP self.led.* 用）。注意：下一次设备状态变化会覆盖手动颜色 */
+    bool SupportsColor() const override { return true; }
+    void SetColor(uint8_t r, uint8_t g, uint8_t b) override;
+    void TurnOn() override;
+    void TurnOff() override;
+
 private:
     std::mutex mutex_;
     TaskHandle_t blink_task_ = nullptr;
@@ -32,9 +38,6 @@ private:
     void BlinkOnce();
     void Blink(int times, int interval_ms);
     void StartContinuousBlink(int interval_ms);
-    void TurnOn();
-    void TurnOff();
-    void SetColor(uint8_t r, uint8_t g, uint8_t b);
 };
 
 #endif // _SINGLE_LED_H_
