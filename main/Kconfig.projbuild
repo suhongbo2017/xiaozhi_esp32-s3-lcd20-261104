@@ -6,6 +6,23 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config MUSIC_API_URL
+    string "Music/stock API base URL (self-hosted music_server.py)"
+    default "http://47.116.199.150:2233"
+    help
+        Base URL of the self-hosted music service. Supports /search, /play,
+        /stream_ogg, /lyric_json and /stock/* endpoints. Can be overridden at
+        runtime via NVS namespace "music" key "api_url".
+
+config MUSIC_API_SECRET
+    string "Music/stock API auth secret"
+    default "your-esp32-secret-key-2024"
+    help
+        Shared secret used to build the X-Key header:
+        sha256("<mac>:<chip>:<uptime_s>:<secret>")[:32]
+        Must match AUTH_SECRET on the server. Runtime override: NVS
+        namespace "music" key "api_secret".
+
 config LCD20_DIAG_MODE
     bool "LCD20 bring-up diagnostics (backlight + solid color sweep)"
     default n

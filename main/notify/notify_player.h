@@ -30,6 +30,9 @@ public:
     void Stop();
     void OnPlaybackProgress(uint32_t playback_id, uint32_t media_position_ms);
     void OnPlaybackDrained();
+    /** 拉流 HTTP 超时（ms）。音乐首次点播可能服务端在转码，需要放宽。 */
+    void SetHttpTimeout(int timeout_ms) { http_timeout_ms_ = timeout_ms; }
+
     bool IsActive(uint32_t playback_id = 0) const;
     bool IsBusy() const;
 
@@ -46,6 +49,7 @@ private:
     uint32_t last_playback_position_ms_ = 0;
     uint32_t underrun_count_ = 0;
     size_t next_subtitle_index_ = 0;
+    int http_timeout_ms_ = 5000;
     bool active_ = false;
     bool worker_running_ = false;
     bool cancelled_ = false;

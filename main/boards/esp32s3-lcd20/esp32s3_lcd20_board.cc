@@ -20,6 +20,7 @@
 #include "config.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include <led_strip.h>
 #include "music/music_player.h"
 
 #include <memory>
@@ -158,7 +159,37 @@ private:
                     if (bl) {
                         bl->SetBrightness(100, true);
                     }
-                } else if (phase >= 10) {
+                } else if (phase >= 10 && (phase - 10) % 2 == 0) {
+                    /* LED 自检：直接用 led_strip 驱动 WS2812，红 → 绿 → 蓝 → 灭，每 2 秒一档 */
+                    static led_strip_handle_t diag_strip = nullptr;
+                    if (diag_strip == nullptr) {
+                        led_strip_config_t cfg = {};
+                        cfg.strip_gpio_num = BUILTIN_LED_GPIO;
+                        cfg.max_leds = 1;
+                        cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
+                        cfg.led_model = LED_MODEL_WS2812;
+                        led_strip_rmt_config_t rmt = {};
+                        rmt.resolution_hz = 10 * 1000 * 1000;
+                        esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &diag_strip);
+                        ESP_LOGW(TAG, "DIAG LED: create strip on GPIO%d -> %s", BUILTIN_LED_GPIO,
+                                 esp_err_to_name(err));
+                    }
+                    if (diag_strip != nullptr) {
+                        const int step = ((phase - 10) / 2) % 4;
+                        if (step == 3) {
+                            led_strip_clear(diag_strip);
+                        } else {
+                            const uint8_t rgb[3][3] = {{64, 0, 0}, {0, 64, 0}, {0, 0, 64}};
+                            led_strip_set_pixel(diag_strip, 0, rgb[step][0], rgb[step][1], rgb[step][2]);
+                            esp_err_t err = led_strip_refresh(diag_strip);
+                            if (err != ESP_OK) {
+                                ESP_LOGW(TAG, "DIAG LED refresh failed: %s", esp_err_to_name(err));
+                            }
+                        }
+                        ESP_LOGW(TAG, "DIAG LED -> %s", step == 0 ? "RED" : step == 1 ? "GREEN" : step == 2 ? "BLUE" : "OFF");
+                    }
+                }
+                if (phase >= 10) {
                     int i = (phase - 10) / 3 % 4;
                     ESP_LOGW(TAG, "DIAG 5/5: screen bg -> %s (color #%d)", names[i], i);
                     if (display != nullptr) {

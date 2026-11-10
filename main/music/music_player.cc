@@ -3,6 +3,8 @@
 #include "application.h"
 #include "board.h"
 #include "mcp_server.h"
+#include "music_api_client.h"
+#include "music_online.h"
 #include "music_page.h"
 #include "notify/notify_player.h"
 
@@ -33,105 +35,7 @@ void MusicPlayer::Initialize() {
         tools_registered_ = true;
     }
 
-    auto& mcp = McpServer::GetInstance();
-
-    /* 搜索曲库 */
-    mcp.AddTool(
-        "self.music.search_song",
-        "Search songs in the local playlist by keyword (title or artist). "
-        "Returns a JSON array of {id, title, artist, duration_ms}.",
-        PropertyList({Property("keyword", kPropertyTypeString, "")}),
-        [this](const PropertyList& props) -> ReturnValue {
-            auto keyword = props["keyword"].value<std::string>();
-            std::string json = "[";
-            size_t count = 0;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                for (const auto& t : playlist_) {
-                    if (!keyword.empty()) {
-                        bool hit = t.title.find(keyword) != std::string::npos ||
-                                   t.artist.find(keyword) != std::string::npos ||
-                                   t.id == keyword;
-                        if (!hit) {
-                            continue;
-                        }
-                    }
-                    if (count > 0) {
-                        json += ",";
-                    }
-                    json += "{\"id\":\"" + t.id + "\",\"title\":\"" + t.title +
-                            "\",\"artist\":\"" + t.artist +
-                            "\",\"duration_ms\":" + std::to_string(t.duration_ms) + "}";
-                    count++;
-                }
-            }
-            json += "]";
-            return json;
-        });
-
-    /* 播放：支持 url 直推 / 关键词 / 序号 */
-    mcp.AddTool(
-        "self.music.play_song",
-        "Play music. Either provide a stream url (+ optional title/artist), "
-        "or select from the local playlist by keyword or 0-based index.",
-        PropertyList({
-            Property("url", kPropertyTypeString, ""),
-            Property("title", kPropertyTypeString, ""),
-            Property("artist", kPropertyTypeString, ""),
-            Property("keyword", kPropertyTypeString, ""),
-            Property("index", kPropertyTypeInteger, -1),
-        }),
-        [this](const PropertyList& props) -> ReturnValue {
-            auto url = props["url"].value<std::string>();
-            if (!url.empty()) {
-                MusicTrack track;
-                track.id = "adhoc";
-                track.url = url;
-                track.title = props["title"].value<std::string>();
-                if (track.title.empty()) {
-                    track.title = "网络音乐";
-                }
-                track.artist = props["artist"].value<std::string>();
-                return PlayTrack(track);
-            }
-            auto keyword = props["keyword"].value<std::string>();
-            if (!keyword.empty()) {
-                return PlayByKeyword(keyword);
-            }
-            int index = props["index"].value<int>();
-            if (index >= 0) {
-                return PlayIndex(static_cast<size_t>(index));
-            }
-            return PlayIndex(0);
-        });
-
-    /* 按 id 播放 */
-    mcp.AddTool(
-        "self.music.play_song_by_id",
-        "Play a song from the local playlist by its id.",
-        PropertyList({Property("id", kPropertyTypeString)}),
-        [this](const PropertyList& props) -> ReturnValue {
-            return PlayById(props["id"].value<std::string>());
-        });
-
-    /* 显示模式：歌词 / 封面 / 隐藏 */
-    mcp.AddTool(
-        "self.music.set_display_mode",
-        "Set the music screen display mode: `lyric` (scrolling lyrics), `cover` (cover + progress only) "
-        "or `hidden` (no music page).",
-        PropertyList({Property("mode", kPropertyTypeString)}),
-        [this](const PropertyList& props) -> ReturnValue {
-            auto mode = props["mode"].value<std::string>();
-            int value = 0;
-            if (mode == "cover") {
-                value = 1;
-            } else if (mode == "hidden") {
-                value = 2;
-            } else if (mode != "lyric") {
-                return false;
-            }
-            return SetDisplayMode(value);
-        });
+    music_online::RegisterTools(*this);
 
     ESP_LOGI(TAG, "music MCP tools registered");
 
@@ -293,6 +197,98 @@ void MusicPlayer::Stop() {
         ESP_LOGI(TAG, "stopped");
     }
     HidePage();
+}
+
+/* ------------------------------------------------------------------ */
+/* 在线音乐（自建 music_server.py）                                    */
+/* ------------------------------------------------------------------ */
+void MusicPlayer::RememberSong(const std::string& id, const std::string& title,
+                               const std::string& artist, uint32_t duration_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& kv : song_cache_) {
+        if (kv.first == id) {
+            kv.second = SongMeta{title, artist, duration_ms};
+            return;
+        }
+    }
+    song_cache_.emplace_back(id, SongMeta{title, artist, duration_ms});
+    if (song_cache_.size() > 20) {
+        song_cache_.erase(song_cache_.begin());
+    }
+}
+
+bool MusicPlayer::SearchOnline(const std::string& song, const std::string& artist, int offset,
+                               std::string* out_json) {
+    std::vector<MusicApiClient::SongItem> items;
+    auto& api = MusicApiClient::GetInstance();
+    if (!api.Search(song, artist, offset, &items, out_json)) {
+        return false;
+    }
+    for (const auto& it : items) {
+        /* 服务端 /search 不含时长，先用 0；播放时再补 */
+        RememberSong(it.id, it.name, it.artist, 0);
+    }
+    return true;
+}
+
+bool MusicPlayer::PlayOnlineById(const std::string& song_id) {
+    if (song_id.empty()) {
+        return false;
+    }
+    auto& api = MusicApiClient::GetInstance();
+    MusicTrack track;
+    track.id = song_id;
+    track.url = api.StreamUrlById(song_id);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& kv : song_cache_) {
+            if (kv.first == song_id) {
+                track.title = kv.second.title;
+                track.artist = kv.second.artist;
+                track.duration_ms = kv.second.duration_ms;
+                break;
+            }
+        }
+    }
+    if (track.title.empty()) {
+        track.title = "网络音乐";
+    }
+    std::vector<MusicLyricLine> lyrics;
+    if (api.GetLyrics(song_id, &lyrics)) {
+        track.lyrics = std::move(lyrics);
+    }
+    /* 服务端没给时长：用歌词最后一行 + 20s 估个大致值，仅用于进度条 */
+    if (track.duration_ms == 0 && !track.lyrics.empty()) {
+        track.duration_ms = track.lyrics.back().start_ms + 20000;
+    }
+    ESP_LOGI(TAG, "play online id=%s title='%s' lyrics=%u", song_id.c_str(), track.title.c_str(),
+             static_cast<unsigned>(track.lyrics.size()));
+    return PlayTrack(track);
+}
+
+bool MusicPlayer::PlayOnline(const std::string& song, const std::string& artist) {
+    if (song.empty()) {
+        return false;
+    }
+    std::vector<MusicApiClient::SongItem> items;
+    auto& api = MusicApiClient::GetInstance();
+    if (!api.Search(song, artist, 0, &items, nullptr)) {
+        ESP_LOGW(TAG, "online search failed for '%s'", song.c_str());
+        return false;
+    }
+    const MusicApiClient::SongItem* chosen = nullptr;
+    for (const auto& it : items) {
+        RememberSong(it.id, it.name, it.artist, 0);
+        if (chosen == nullptr && it.playable) {
+            chosen = &it;
+        }
+    }
+    if (chosen == nullptr) {
+        chosen = &items.front(); /* 都不可播放也试一次（服务端会再判） */
+    }
+    ESP_LOGI(TAG, "online play: '%s - %s' (id=%s, playable=%d)", chosen->name.c_str(),
+             chosen->artist.c_str(), chosen->id.c_str(), chosen->playable);
+    return PlayOnlineById(chosen->id);
 }
 
 bool MusicPlayer::Next() {

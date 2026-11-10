@@ -54,6 +54,18 @@ public:
     bool PlayByKeyword(const std::string& keyword);
     /** 直接播放一首（可临时覆盖歌词/标题，用于 URL 直推） */
     bool PlayTrack(const MusicTrack& track);
+
+    /* ---- 在线音乐（自建 music_server.py）---- */
+    /** 按歌名/歌手在线搜索并直接播放第一首可播放的（旧固件语义） */
+    bool PlayOnline(const std::string& song, const std::string& artist);
+    /** 按 song_id 在线播放（旧固件 self.music.play_song_by_id 语义） */
+    bool PlayOnlineById(const std::string& song_id);
+    /** 在线搜索，返回服务端原始 JSON（供 MCP 工具直接回给大模型） */
+    bool SearchOnline(const std::string& song, const std::string& artist, int offset,
+                      std::string* out_json);
+    /** 记住最近一次搜索到的歌曲元信息（id -> title/artist/duration），供 by_id 播放使用 */
+    void RememberSong(const std::string& id, const std::string& title, const std::string& artist,
+                      uint32_t duration_ms);
     void Stop();
     bool Next();
     /** 上一首；未在播放时从头/尾开始播（实体按键用） */
@@ -88,6 +100,14 @@ private:
     bool page_initialized_ = false;
     bool tools_registered_ = false;
     void* page_ = nullptr;   /* std::unique_ptr<MusicPage>，避免头文件互相包含 */
+
+    /* song_id -> 元信息（在线播放用） */
+    struct SongMeta {
+        std::string title;
+        std::string artist;
+        uint32_t duration_ms = 0;
+    };
+    std::vector<std::pair<std::string, SongMeta>> song_cache_;
 };
 
 #endif  // MUSIC_PLAYER_H

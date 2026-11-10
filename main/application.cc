@@ -5,6 +5,7 @@
 #include "board.h"
 #include "display.h"
 #include "mcp_server.h"
+#include "market/stock_tools.h"
 #include "music/music_player.h"
 #include "mqtt_protocol.h"
 #include "settings.h"
@@ -107,6 +108,7 @@ void Application::Initialize() {
 
     /* 音乐模块：注册 self.music.* 工具（无硬件依赖） */
     MusicPlayer::GetInstance().Initialize();
+    StockTools::Initialize();
 
     // Set network event callback for UI updates and network state handling
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
@@ -1169,6 +1171,9 @@ bool Application::StartMusic(const std::string& audio_url, const std::vector<Not
         playback_id = ++notification_playback_id_;
     }
 
+    /* 音乐首次点播时服务端可能正在转码，放宽拉流超时到 25s */
+    notify_player_.SetHttpTimeout(25000);
+
     bool started = notify_player_.Start(
         audio_url, std::vector<NotifySubtitle>(lyrics), playback_id,
         nullptr,  /* 歌词由 MusicPlayer 按进度驱动，不使用字幕回调 */
@@ -1188,6 +1193,7 @@ bool Application::StartMusic(const std::string& audio_url, const std::vector<Not
 
 void Application::StopMusic() {
     notify_player_.Stop();
+    notify_player_.SetHttpTimeout(5000);   /* 恢复默认，通知/播报用 */
     audio_service_.ResetDecoder();
     MusicPlayer::GetInstance().OnEngineStopped();
     auto& board = Board::GetInstance();

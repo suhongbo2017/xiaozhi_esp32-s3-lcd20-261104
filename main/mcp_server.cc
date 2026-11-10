@@ -366,6 +366,7 @@ void McpServer::ParseMessage(const cJSON* json) {
     if (method_str.find("notifications") == 0) {
         return;
     }
+    ESP_LOGI(TAG, "MCP <- %s", method_str.c_str());
     
     // Check params
     auto params = cJSON_GetObjectItem(json, "params");
@@ -511,6 +512,7 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
                                      return tool->name() == tool_name; 
                                  });
     
+    ESP_LOGI(TAG, "MCP tools/call: %s", tool_name.c_str());
     if (tool_iter == tools_.end()) {
         ESP_LOGE(TAG, "tools/call: Unknown tool: %s", tool_name.c_str());
         ReplyError(id, "Unknown tool: " + tool_name);

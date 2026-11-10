@@ -183,7 +183,7 @@ void NotifyPlayer::WorkerTask() {
     bool success = false;
     auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
     if (http) {
-        http->SetTimeout(kHttpTimeoutMs);
+        http->SetTimeout(http_timeout_ms_);
         http->SetHeader("Accept", "audio/ogg, application/ogg");
         http->SetHeader("Accept-Encoding", "identity");
         const bool opened = http->Open("GET", audio_url);
