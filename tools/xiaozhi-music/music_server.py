@@ -718,6 +718,170 @@ def kuwo_pick(candidates, song, artist):
     return sorted(candidates, key=rank)
 
 
+
+# ============================================================
+# 腾讯音乐源（vkeys 公共 API，免费、免登录）
+# 搜索命中官方原唱；免费曲目给 320kbps/SQ；VIP 曲目给 25kbps 试听但仍是完整时长。
+# ============================================================
+VKEYS_API = "https://api.vkeys.cn/v2/music/tencent"
+_VKEYS_CACHE = {}
+_VKEYS_TTL = 30 * 60
+
+
+def _http_get_text_utf8(url, timeout=15):
+    """vkeys 返回 UTF-8 JSON；不能走 GBK 优先的解码逻辑"""
+    try:
+        host = url.split("/")[2]
+        path = "/" + "/".join(url.split("/")[3:])
+        if url.startswith("https://"):
+            conn = http.client.HTTPSConnection(host, timeout=timeout)
+        else:
+            conn = http.client.HTTPConnection(host, timeout=timeout)
+        conn.request("GET", path, headers={"User-Agent": NETEASE_UA, "Accept": "application/json"})
+        r = conn.getresponse()
+        body = r.read()
+        conn.close()
+        return body.decode("utf-8", "replace") if r.status == 200 else ""
+    except Exception:
+        return ""
+
+
+def _interval_to_ms(text):
+    """'4分59秒' -> 299000"""
+    try:
+        m = re.match(r"(?:(\d+)\s*分)?\s*(\d+)\s*秒?", str(text or ""))
+        if not m:
+            return 0
+        return (int(m.group(1) or 0) * 60 + int(m.group(2))) * 1000
+    except Exception:
+        return 0
+
+
+def vkeys_search(song, artist="", limit=10):
+    key = "tx:" + song.strip().lower() + "|" + artist.strip().lower()
+    hit = _VKEYS_CACHE.get(key)
+    if hit and time.time() - hit[0] < _VKEYS_TTL:
+        return hit[1]
+    kw = song + (" " + artist if artist else "")
+    raw = _http_get_text_utf8(VKEYS_API + "?word=%s&num=%d" % (urllib.parse.quote(kw), limit))
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw).get("data") or []
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        data = [data]
+    out = []
+    for it in data:
+        sid = it.get("id")
+        if sid is None:
+            continue
+        out.append({
+            "id": "tx%d" % int(sid),
+            "name": _clean(it.get("song") or it.get("name") or it.get("title")),
+            "artist": _clean(it.get("singer") or it.get("artist")),
+            "album": _clean(it.get("album")),
+            "duration": _interval_to_ms(it.get("interval") or it.get("duration")),
+            "provider": "tencent",
+            "score": 0,
+        })
+    if out:
+        _VKEYS_CACHE[key] = (time.time(), out)
+    log("tencent search %r -> %d item(s)" % (kw, len(out)))
+    return out
+
+
+def _tx_detail(song_id):
+    tid = str(song_id)
+    if tid.startswith("tx"):
+        tid = tid[2:]
+    key = "txid:" + tid
+    hit = _VKEYS_CACHE.get(key)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    raw = _http_get_text_utf8(VKEYS_API + "?id=%s" % tid)
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+        data = d.get("data")
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if isinstance(data, dict):
+            _VKEYS_CACHE[key] = (time.time(), data)
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def vkeys_play_url(song_id):
+    d = _tx_detail(song_id)
+    if not d:
+        return ""
+    url = d.get("url") or ""
+    if not url.startswith("http"):
+        return ""
+    info = _tx_detail(song_id) or {}
+    log("tencent url id=%s quality=%s kbps=%s" % (song_id, info.get("quality"), info.get("kbps")))
+    return url
+
+
+def vkeys_trial_only(song_id):
+    """vkeys 的 quality 里带"试听"说明只有片段（VIP）；免费曲目是 320kbps/SQ"""
+    d = _tx_detail(song_id) or {}
+    q = str(d.get("quality") or "")
+    if not d.get("url"):
+        return True
+    return ("试听" in q) or (not q and str(d.get("kbps", "")).replace("kbps", "").isdigit()
+                             and int(str(d.get("kbps", "0")).replace("kbps", "") or 0) < 64)
+
+
+def vkeys_is_playable(song_id):
+    """playable = 有 url 且不是仅试听片段"""
+    return not vkeys_trial_only(song_id)
+
+
+def vkeys_lyric_lrc(song_id):
+    tid = str(song_id)
+    if tid.startswith("tx"):
+        tid = tid[2:]
+    raw = _http_get_text_utf8(VKEYS_API + "/lyric?id=%s" % tid)
+    if not raw:
+        return ""
+    try:
+        d = json.loads(raw)
+        data = d.get("data") or {}
+        if isinstance(data, dict):
+            return data.get("lrc") or data.get("lyric") or ""
+    except Exception:
+        pass
+    return ""
+
+
+def vkeys_pick(candidates, song, artist):
+    def norm(x):
+        return (x or "").lower().replace(" ", "")
+
+    title, wanted = norm(song), norm(artist)
+
+    def rank(c):
+        name, ar = norm(c["name"]), norm(c["artist"])
+        r = 0
+        if title and name == title:
+            r -= 100
+        elif title and title in name:
+            r -= 50
+        if wanted and wanted in ar:
+            r -= 30
+        if "live" in name or "伴奏" in name:
+            r += 20
+        return r
+
+    return sorted(candidates, key=rank)
+
+
 def check_auth_query(params):
     """同一套密钥，但允许通过 URL query 传递（设备播放器拉流时加不了 header）"""
     def get(name):
@@ -798,7 +962,9 @@ class Handler(BaseHTTPRequestHandler):
             artist_name = ""
             purl = None
             if song_id:
-                if song_id.startswith("kw"):
+                if song_id.startswith("tx"):
+                    purl = vkeys_play_url(song_id)
+                elif song_id.startswith("kw"):
                     purl = kuwo_play_url(song_id)
                 else:
                     purl = resolve_play_url(song_id)
@@ -817,21 +983,37 @@ class Handler(BaseHTTPRequestHandler):
                 if not song:
                     self._send_json(400, {"error": "missing song"})
                     return
-                ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
+                ordered = vkeys_pick(vkeys_search(song, artist, 6), song, artist)
+                if not ordered:
+                    ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
                 if not ordered:
                     ordered = search_candidates(song, artist)
                 if not ordered:
                     self._send_json(404, {"error": "song not found"})
                     return
                 chosen = None
+                trial_choice = None
                 for c in ordered:
-                    if str(c.get("id", "")).startswith("kw"):
-                        p = kuwo_play_url(c["id"])
+                    cid = str(c.get("id", ""))
+                    if cid.startswith("tx"):
+                        if vkeys_trial_only(cid):
+                            # 记住这个试听候选，若后面没有完整版再退回它
+                            if trial_choice is None:
+                                trial_choice = (c, vkeys_play_url(cid))
+                            continue
+                        p = vkeys_play_url(cid)
+                    elif cid.startswith("kw"):
+                        p = kuwo_play_url(cid)
                     else:
-                        p = resolve_play_url(c["id"])
+                        p = resolve_play_url(cid)
                     if p and probe_range(p):
                         chosen = (c, p)
                         break
+                if chosen is None and trial_choice and trial_choice[1]:
+                    chosen = trial_choice   # 实在没有完整版，退回试听并打日志
+                    trial_mode = True
+                    expected = 0
+                    log("only trial available for %r" % (song,))
                 if not chosen:
                     self._send_json(404, {"error": "no playable stream"})
                     return
@@ -840,6 +1022,15 @@ class Handler(BaseHTTPRequestHandler):
                 title = c.get("name", "")
                 artist_name = c.get("artist", "")
             expected = 0
+            for (_k, (_t, cands)) in _VKEYS_CACHE.items():
+                if not isinstance(cands, list):
+                    continue
+                for c in cands:
+                    if str(c.get("id")) == str(song_id):
+                        expected = int(c.get("duration") or 0)
+                        break
+                if expected:
+                    break
             for (_k, (_t, cands)) in _KUWO_CACHE.items():
                 if not isinstance(cands, list):
                     continue
@@ -849,6 +1040,12 @@ class Handler(BaseHTTPRequestHandler):
                         break
                 if expected:
                     break
+
+            trial_mode = False
+            if song_id.startswith("tx") and vkeys_trial_only(song_id):
+                trial_mode = True       # VIP 歌曲：免费源只有 60s 试听，仍然播出来
+                expected = 0            # 不做时长校验
+                log("playing trial clip for %r (VIP)" % (title or song,))
 
             ogg = build_ogg(song_id, purl, expected)
             if not ogg and song_id.startswith("kw"):
@@ -867,7 +1064,8 @@ class Handler(BaseHTTPRequestHandler):
                         break
             if not ogg:
                 self._send_json(503, {"error": "no_full_stream",
-                                      "hint": "provider only returned a trial clip"})
+                                      "hint": "only VIP trial clips available for this song; "
+                                              "ask the user to pick another version"})
                 return
             try:
                 with open(ogg, "rb") as fh:
@@ -879,6 +1077,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "audio/ogg")
             self.send_header("Content-Length", str(len(data)))
+            if trial_mode:
+                self.send_header("X-Trial-Clip", "1")
             self.send_header("X-Song-Title", urllib.parse.quote(title or ""))
             self.send_header("X-Song-Artist", urllib.parse.quote(artist_name or ""))
             self.end_headers()
@@ -886,9 +1086,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # ---- 新增：歌词 JSON ----
-        m = re.match(r"^/lyric_json/(kw)?(\d+)$", path)
+        m = re.match(r"^/lyric_json/(tx|kw)?(\d+)$", path)
         if m:
-            if m.group(1):
+            if m.group(1) == "tx":
+                lrc = vkeys_lyric_lrc(m.group(2))
+            elif m.group(1) == "kw":
                 lrc = kuwo_lyric_lrc(m.group(2))
             else:
                 lrc = fetch_lyric(m.group(2))
@@ -921,7 +1123,9 @@ class Handler(BaseHTTPRequestHandler):
             if not song:
                 self._send_json(400, {"error": "missing song"})
                 return
-            ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
+            ordered = vkeys_pick(vkeys_search(song, artist, 6), song, artist)
+            if not ordered:
+                ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
             if not ordered:
                 ordered = search_candidates(song, artist)
             if not ordered:
@@ -931,10 +1135,15 @@ class Handler(BaseHTTPRequestHandler):
             chosen = None
             chosen_by = "kuwo"
             for c in ordered:
-                if str(c.get("id", "")).startswith("kw"):
-                    purl = kuwo_play_url(c["id"])
+                cid = str(c.get("id", ""))
+                if cid.startswith("tx"):
+                    if vkeys_trial_only(cid):
+                        continue
+                    purl = vkeys_play_url(cid)
+                elif cid.startswith("kw"):
+                    purl = kuwo_play_url(cid)
                 else:
-                    purl = resolve_play_url(c["id"])
+                    purl = resolve_play_url(cid)
                 if purl and probe_range(purl):
                     chosen = {"info": c, "url": purl}
                     break
@@ -968,8 +1177,11 @@ class Handler(BaseHTTPRequestHandler):
             if not song:
                 self._send_json(400, {"error": "missing song"})
                 return
-            # 首选酷我（官方版本命中率高），无结果再退回网易云
-            ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
+            # 首选腾讯(vkeys 公共 API)：搜索准确、免费曲目给高码率
+            ordered = vkeys_pick(vkeys_search(song, artist, max(limit + 3, 6)), song, artist)
+            # 其次酷我（官方版本命中率高），最后退回网易云
+            if not ordered:
+                ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
             if not ordered:
                 ordered = search_candidates(song, artist)
             if not ordered:
@@ -979,6 +1191,8 @@ class Handler(BaseHTTPRequestHandler):
             # 并发探测每个候选是否可播放（有缓存），标记 VIP/无法播放的
             def _playable(c):
                 cid = str(c.get("id", ""))
+                if cid.startswith("tx"):
+                    return vkeys_is_playable(cid)   # 仅查 detail(缓存)，不做 range 探测
                 if c.get("provider") == "kuwo" or cid.startswith("kw"):
                     return kuwo_is_playable(cid)
                 return is_playable(cid)
@@ -1021,6 +1235,21 @@ class Handler(BaseHTTPRequestHandler):
             song_id = (params.get("id") or [""])[0]
             if not song_id:
                 self._send_json(400, {"error": "missing id"})
+                return
+            if song_id.startswith("tx"):
+                purl = vkeys_play_url(song_id)
+                if not (purl and probe_range(purl)):
+                    self._send_json(404, {"error": "not_playable"})
+                    return
+                d = _tx_detail(song_id) or {}
+                self._send_json(200, {
+                    "id": song_id,
+                    "title": _clean(d.get("song") or ""),
+                    "artist": _clean(d.get("singer") or ""),
+                    "audio_url": purl,
+                    "lyric_url": f"{BASE_URL}/lyric_json/{song_id}",
+                    "quality": d.get("quality"), "kbps": d.get("kbps"),
+                })
                 return
             if song_id.startswith("kw"):
                 purl = kuwo_play_url(song_id)

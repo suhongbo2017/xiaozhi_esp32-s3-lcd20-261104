@@ -60,3 +60,43 @@ systemctl daemon-reload && systemctl restart xiaozhi-music
 
 开启日志：`journalctl -u xiaozhi-music -f`，会打印
 `kuwo search '...' -> N item(s)` / `transcode too short ... (trial clip?)` / `kuwo clip rejected, falling back to netease`。
+
+---
+
+## 6. 最终方案：改用免费源（腾讯音乐 via vkeys 公共 API）
+
+用户要求"用免费的源"，不再依赖网易云 cookie。实测了多个免费接口：
+
+| 源 | 搜索准确性 | 免费完整性 | 结论 |
+|---|---|---|---|
+| 网易云(未登录) | ❌ 官方版本进不了前 50 | ✅ 部分歌可完整 | 搜索不可用 |
+| 酷我 | ✅ 官方第一 | ❌ 仅 11s 试听 | 只能当搜索源 |
+| 酷狗 | ✅ 官方第一 | ❌ 播放接口已封锁 | 不可用 |
+| 千千/百度(taihe) | – | – | 502 已停服 |
+| **腾讯音乐(vkeys 公共 API)** | ✅ **官方第一** | ✅ **免费曲目 320kbps/SQ 完整；VIP 曲目 60s 试听** | **采用** |
+
+### 接口
+```
+搜索   https://api.vkeys.cn/v2/music/tencent?word=<歌名 歌手>&num=10
+详情   https://api.vkeys.cn/v2/music/tencent?id=<id>        -> data.url / quality / kbps
+歌词   https://api.vkeys.cn/v2/music/tencent/lyric?id=<id>  -> data.lrc (LRC 文本)
+```
+id 加前缀 `tx`（如 `tx102065756`），设备端零改动。
+
+### 实测结果
+
+| 查询 | 结果 |
+|---|---|
+| 七里香 | `tx102065756` **七里香 - 周杰伦**（299s，VIP→试听60s） |
+| 晴天 | `tx97773` **晴天 - 周杰伦**（269s，VIP→试听60s） |
+| 夜曲 | `tx718477` **夜曲 - 周杰伦**（226s，VIP→试听60s） |
+| 晴天（超盛大弦乐） | 免费曲目 → `playable=true`，320kbps+ 完整播放 |
+| 歌词 | `http=200, 38 行`，时间轴正确 |
+
+### 关键设计
+1. **搜索 <1.5s**：只查 detail 判 `quality` 是否含"试听"，不再做昂贵的 range 探测
+2. `playable` 语义：`false` = 只有试听片段（VIP）；`true` = 可完整播放
+3. **播放兜底链**：腾讯 → (失败) 酷我 → 网易云；都拿不到才返回 503
+4. VIP 歌不再直接报错，而是**播 60s 试听**并在响应头标记 `X-Trial-Clip: 1`、日志告警
+5. 时长校验（ffprobe）保留：防止把 11s/60s 片段当完整歌曲缓存
+6. 仍支持 `NETEASE_COOKIE` 环境变量：哪天想完整播 VIP 歌，配上即可（优先走网易云完整源）
