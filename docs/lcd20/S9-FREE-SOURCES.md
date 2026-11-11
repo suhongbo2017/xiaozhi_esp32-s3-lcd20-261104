@@ -53,3 +53,34 @@
 
 - **完全免费、可完整播放**：本地曲库 + ccMixter + Incompetech
 - **流行商业歌曲**：本版本不再支持（所有版权源已移除）；若以后想恢复，需自行提供 `NETEASE_COOKIE` 或重新接回 vkeys（代码在 git 历史里）
+
+---
+
+## 6. 修复"所有音乐都找不到/不能播"（2026-11-11）
+
+日志显示两条独立的失败：
+
+```
+W MusicApi: search failed: http 404            ← 搜中文流行歌名（版权源已删，正常 404）
+GET /lyric_json/lb12 404
+GET /stream_ogg?id=lb12 404                    ← MP3 路径被拒后回退旧链路，旧链路不认 lb id
+```
+
+**根因**：
+1. `StartMusicMp3()` 没有实现"抢占"：语音点歌时设备在 `speaking` 状态 → 直接返回 false
+   → 回退到 `StartMusic()`（旧 OGG 链路）→ `stream_ogg` 不认 `lb*` id → 404
+2. 版权源已全部删除，所以搜"七里香/你的眼神"这类歌名必然 404（这是设计如此）
+
+**修复**：
+- `StartMusicMp3()` 加入与旧路径相同的抢占逻辑（abort speaking → 500ms 后在主任务启动），
+  并用 `pending_music_is_mp3_` 区分两条路径
+- `/stream_ogg` 与 `/lyric_json` 支持 `lb*`（本地曲库兜底）
+- `/search` 的 404 现在返回 `available_genres`（钢琴/轻音乐/爵士/放松/欢快/氛围/电子/民谣），
+  方便助手引导用户换风格
+
+**实测（本地曲库 23 首就绪后）**
+```
+搜 钢琴  → lb4 Fig Leaf Rag / lb8 Gymnopedie No 1（CC BY 4.0，本地直发）
+/play?id=lb0 → http://47.116.199.150:2233/library/Airport_Lounge.mp3
+无鉴权拉流   → 200，2.55MB，63.7 秒 ✓
+```

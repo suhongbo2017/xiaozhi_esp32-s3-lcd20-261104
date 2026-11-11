@@ -160,6 +160,7 @@ private:
     /* 非 idle 时被推迟启动的音乐（先中断播报，500ms 后再在主任务启动） */
     std::string pending_music_url_;
     std::vector<NotifySubtitle> pending_music_lyrics_;
+    bool pending_music_is_mp3_ = false;
     esp_timer_handle_t pending_music_timer_ = nullptr;
     int music_saved_volume_ = -1;   /* 播放前音量，用于 ducking 恢复 */
 

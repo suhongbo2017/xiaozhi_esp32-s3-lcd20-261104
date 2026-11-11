@@ -1473,11 +1473,16 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 song_id = str(ordered[0]["id"])
                 title, artist_name = ordered[0].get("name", ""), ordered[0].get("artist", "")
-            purl = free_url(song_id)
+            if str(song_id).startswith("lb"):
+                rel = lib_url(song_id)
+                purl = ("http://%s%s" % (self.headers.get("Host") or ("47.116.199.150:%d" % PORT), rel)) if rel else ""
+                meta = lib_meta(song_id)
+            else:
+                purl = free_url(song_id)
+                meta = free_meta(song_id)
             if not purl:
                 self._send_json(404, {"error": "not_found"})
                 return
-            meta = free_meta(song_id)
             title = title or meta.get("name", "")
             artist_name = artist_name or meta.get("artist", "")
             waited = 0
@@ -1521,7 +1526,7 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        m = re.match(r"^/lyric_json/(cc|ik)?(\d*)$", path)
+        m = re.match(r"^/lyric_json/(cc|ik|lb)?(\d*)$", path)
         if m:
             # 免费源（CC 曲目）没有 LRC 歌词
             self._send_json(200, {"id": (m.group(1) or "") + (m.group(2) or ""), "lines": []})
@@ -1615,7 +1620,10 @@ class Handler(BaseHTTPRequestHandler):
             # 其次酷我（官方版本命中率高），最后退回网易云
             if not ordered:
                 self._send_json(404, {"error": "song not found",
-                                      "hint": "only free/CC catalog is available"})
+                                      "hint": "only free/CC catalog is available; "
+                                              "try genre keywords instead",
+                                      "available_genres": ["钢琴", "轻音乐", "爵士", "放松",
+                                                           "欢快", "氛围", "电子", "民谣"]})
                 return
             page = ordered[offset:offset + limit]
             # 并发探测每个候选是否可播放（有缓存），标记 VIP/无法播放的

@@ -1158,6 +1158,7 @@ bool Application::StartMusic(const std::string& audio_url, const std::vector<Not
                  static_cast<int>(GetDeviceState()));
         pending_music_url_ = audio_url;
         pending_music_lyrics_ = lyrics;
+        pending_music_is_mp3_ = false;
 
         auto state = GetDeviceState();
         if (state == kDeviceStateSpeaking) {
@@ -1211,8 +1212,57 @@ bool Application::StartMusicMp3(const std::string& audio_url, const std::vector<
         return false;
     }
     if (GetDeviceState() != kDeviceStateIdle) {
-        ESP_LOGW(TAG, "StartMusicMp3 rejected: state=%d", static_cast<int>(GetDeviceState()));
-        return false;
+        /* 语音点歌时通常处于 speaking/listening：先中断，500ms 后重试 */
+        ESP_LOGI(TAG, "Music(mp3) request in state %d: abort, retry in 500ms",
+                 static_cast<int>(GetDeviceState()));
+        pending_music_url_ = audio_url;
+        pending_music_lyrics_ = lyrics;
+        pending_music_is_mp3_ = true;
+        auto state = GetDeviceState();
+        if (state == kDeviceStateSpeaking) {
+            AbortSpeaking(kAbortReasonNone);
+        } else if (state == kDeviceStateListening && protocol_ != nullptr) {
+            protocol_->CloseAudioChannel();
+        }
+        if (notify_player_.IsBusy()) {
+            notify_player_.Stop();
+        }
+        if (GetDeviceState() != kDeviceStateIdle) {
+            SetDeviceState(kDeviceStateIdle);
+        }
+        if (pending_music_timer_ == nullptr) {
+            esp_timer_create_args_t args = {
+                .callback =
+                    [](void* arg) {
+                        auto* app = static_cast<Application*>(arg);
+                        app->Schedule([app]() {
+                            std::string url = app->pending_music_url_;
+                            auto pending_lyrics = app->pending_music_lyrics_;
+                            bool is_mp3 = app->pending_music_is_mp3_;
+                            app->pending_music_url_.clear();
+                            app->pending_music_lyrics_.clear();
+                            if (url.empty()) {
+                                return;
+                            }
+                            if (is_mp3) {
+                                app->StartMusicMp3(url, pending_lyrics);
+                            } else {
+                                app->StartMusicNow(url, pending_lyrics);
+                            }
+                        });
+                    },
+                .arg = this,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "pending_music",
+                .skip_unhandled_events = true,
+            };
+            esp_timer_create(&args, &pending_music_timer_);
+        }
+        if (pending_music_timer_ != nullptr) {
+            esp_timer_stop(pending_music_timer_);
+            esp_timer_start_once(pending_music_timer_, 500 * 1000);
+        }
+        return true;
     }
 
     auto& board = Board::GetInstance();
