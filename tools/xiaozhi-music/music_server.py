@@ -402,12 +402,12 @@ def _prewarm_ogg(song_id):
         if os.path.exists(_ogg_path(song_id)) and os.path.getsize(_ogg_path(song_id)) > 1024:
             return
         sid = str(song_id)
-        if sid.startswith(("cc", "ik")):
-            u = free_url(sid)
-            if u:
-                build_ogg(sid, u, 0)
-                log("prewarm free done %s" % sid)
+        u = free_url(sid)
+        if not u:
             return
+        build_ogg(sid, u, 0)
+        log("prewarm free done %s" % sid)
+        return
         purl = resolve_play_url(song_id)
         if purl and probe_range(purl):
             build_ogg(song_id, purl)
@@ -980,6 +980,117 @@ IK_CATALOG = [
 ]
 
 
+
+# ============================================================
+# 本地 CC 曲库（自托管，最稳）：/opt/xiaozhi-music/library/*.mp3
+# 与 Incompetech 的 CC BY 曲目同源，但由本机直接提供，不依赖外部站点
+# ============================================================
+LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "library")
+os.makedirs(LIB_DIR, exist_ok=True)
+_LIB_ITEMS = []
+_LIB_SCANNED_AT = 0.0
+
+# 文件名 -> 中文标签（用于"钢琴曲/放松/搞笑"这类匹配）
+_IK_TAGS = {
+    "Monkeys_Spinning_Monkeys": "欢快 搞笑 滑稽 背景 纯音乐",
+    "Carefree": "轻快 欢快 尤克里里 纯音乐",
+    "Sneaky_Snitch": "滑稽 悬疑 喜剧 搞笑",
+    "Wallpaper": "轻快 复古 纯音乐",
+    "Fluffing_a_Duck": "俏皮 欢快 搞笑",
+    "Investigations": "悬疑 探案 紧张",
+    "Local_Forecast": "轻松 商务 纯音乐",
+    "Life_of_Riley": "欢快 民谣 纯音乐",
+    "Fig_Leaf_Rag": "复古 拉格泰姆 钢琴",
+    "Happy_Alley": "开心 明亮 纯音乐",
+    "Bossa_Antigua": "波萨诺瓦 慵懒 放松 爵士",
+    "Airport_Lounge": "沙发音乐 放松 慵懒 爵士",
+    "George_Street_Shuffle": "爵士 摇摆 轻快",
+    "Deliberate_Thought": "安静 思考 氛围 纯音乐",
+    "Fretless": "舒缓 吉他 纯音乐",
+    "Gymnopedie_No_1": "古典 钢琴 安静 舒缓",
+    "Hall_of_the_Mountain_King": "古典 紧张 戏剧",
+    "Quirky_Dog": "俏皮 搞笑 欢快",
+    "Rocket_Power": "动感 电子 欢快",
+    "Sardana": "民族 欢快 舞曲",
+    "Shiny_Tech": "科技 电子 明亮",
+    "Spazzmatica_Polka": "幽默 快节奏 波尔卡",
+    "Wagon_Wheel": "民谣 乡村 轻松",
+}
+
+
+def lib_refresh(force=False):
+    """扫描本地曲库（60s 内只扫一次）"""
+    global _LIB_ITEMS, _LIB_SCANNED_AT
+    now = time.time()
+    if not force and (now - _LIB_SCANNED_AT) < 60 and _LIB_ITEMS:
+        return _LIB_ITEMS
+    items = []
+    try:
+        names = sorted(f for f in os.listdir(LIB_DIR) if f.lower().endswith(".mp3"))
+    except Exception:
+        names = []
+    for i, fn in enumerate(names):
+        base = os.path.splitext(fn)[0]
+        title = base.replace("_", " ")
+        tags = _IK_TAGS.get(base, "")
+        items.append({
+            "id": "lb%d" % i,
+            "name": title,
+            "artist": "Kevin MacLeod",
+            "album": "CC BY 4.0",
+            "duration": 0,
+            "provider": "library",
+            "score": 0,
+            "tags": tags,
+            "_file": fn,
+        })
+    _LIB_ITEMS = items
+    _LIB_SCANNED_AT = now
+    if items:
+        log("library: %d track(s)" % len(items))
+    return items
+
+
+def lib_search(song, artist="", limit=10):
+    items = lib_refresh()
+    if not items:
+        return []
+    q = (song or "").strip()
+    if not q:
+        import random as _random
+        out = list(items)
+        _random.shuffle(out)
+        return out[:limit]
+    ql = q.lower()
+    qtags = [t.strip() for t in _cc_translate(q).replace(",", " ").split() if t.strip()]
+    matched = []
+    for it in items:
+        hay = (it["name"] + " " + it.get("tags", "")).lower()
+        if ql in hay or any(t in hay for t in qtags):
+            matched.append(it)
+    return matched[:limit]
+
+
+def lib_url(song_id):
+    try:
+        idx = int(str(song_id)[2:])
+    except Exception:
+        return ""
+    items = lib_refresh()
+    if 0 <= idx < len(items):
+        return "/library/" + urllib.parse.quote(items[idx]["_file"])
+    return ""
+
+
+def lib_meta(song_id):
+    try:
+        idx = int(str(song_id)[2:])
+    except Exception:
+        return {}
+    items = lib_refresh()
+    return items[idx] if 0 <= idx < len(items) else {}
+
+
 def _cc_translate(kw):
     """中文关键词映射成英文标签；没有命中就原样返回"""
     for zh, en in CC_ZH_MAP:
@@ -1103,6 +1214,29 @@ def free_url(song_id):
             for it in items:
                 if str(it.get("id")) == sid:
                     return it.get("_url") or ""
+        # 缓存里没有（例如服务重启后）：按 upload_id 直接查一次
+        rid = sid[2:]
+        raw = _http_get_text_utf8("https://ccmixter.org/api/query?f=json&ids=%s" % rid)
+        if raw:
+            try:
+                arr = json.loads(raw)
+                it = arr[0] if isinstance(arr, list) and arr else {}
+                files = it.get("files") or []
+                rel = (it.get("upload_extra") or {}).get("relative_dir") or ""
+                mp3 = next((f for f in files if str(f.get("file_name", "")).lower().endswith(".mp3")), None)
+                if rel and mp3:
+                    url = "https://ccmixter.org/%s/%s" % (rel, mp3["file_name"])
+                    _CC_CACHE["ccid:" + sid] = (time.time(), [{
+                        "id": sid, "name": _clean(it.get("upload_name")),
+                        "artist": _clean(it.get("user_name")),
+                        "album": _clean(it.get("license_name")),
+                        "duration": _parse_ps(((mp3.get("file_format_info") or {}).get("ps"))),
+                        "provider": "ccmixter", "score": 0, "_url": url,
+                    }])
+                    log("cc id lookup %s -> %s" % (sid, url[:70]))
+                    return url
+            except Exception as e:
+                log("cc id lookup failed %s: %r" % (sid, e))
         return ""
     if sid.startswith("ik"):
         try:
@@ -1180,7 +1314,10 @@ def free_meta(song_id):
 
 
 def free_candidates(song, artist="", limit=6):
-    """CC 候选：ccMixter 命中 + Incompetech 目录（目录兜底仅用于风格类查询）"""
+    """CC 候选：本地曲库 + ccMixter + Incompetech 目录"""
+    items = list(lib_search(song, artist, limit))
+    if items:
+        return items[:max(limit, 6)]
     items = list(free_search(song, artist, limit))
     if items or not _is_genre_query(song):
         return items[:max(limit, 6)]   # 具体歌名：只返回真实匹配（可能为空 -> 上层回退腾讯）
@@ -1291,172 +1428,65 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
 
+        # 本地 CC 曲库：音频文件免鉴权（设备 MP3 播放器不带 header）
+        if path.startswith("/library/"):
+            fname = urllib.parse.unquote(path[len("/library/"):])
+            if "/" in fname or "\\" in fname or not fname.lower().endswith(".mp3"):
+                self._send_json(400, {"error": "bad name"})
+                return
+            full = os.path.join(LIB_DIR, fname)
+            if not os.path.isfile(full):
+                self._send_json(404, {"error": "not_found"})
+                return
+            try:
+                size = os.path.getsize(full)
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                with open(full, "rb") as fh:
+                    while True:
+                        chunk = fh.read(64 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except Exception as e:
+                sys.stderr.write("[music] library send failed: %r\n" % (e,))
+            return
+
         if AUTH_REQUIRED and not (check_auth(self.headers) or check_auth_query(params)):
             self._send_json(401, {"error": "unauthorized"})
             return
 
         # ---- 新增：直接给设备送 OGG/Opus（设备端只解码 Opus）----
         if path == "/stream_ogg":
+            # 兼容旧设备：只支持免费源（cc/ik）转 OGG；新固件直接播 MP3，不走这里
             song_id = (params.get("id") or [""])[0]
             song = (params.get("song") or [""])[0]
             artist = (params.get("artist") or [""])[0]
             title = ""
             artist_name = ""
-            purl = None
-            if song_id:
-                if song_id.startswith(("cc", "ik")):
-                    purl = free_url(song_id)
-                elif song_id.startswith("tx"):
-                    purl = ""
-                    for attempt in range(3):
-                        purl = vkeys_play_url(song_id, force=(attempt > 0))
-                        if purl and probe_any(purl):
-                            break
-                        log("tx url attempt %d failed for %s (vkeys 503?), retrying" % (attempt + 1, song_id))
-                        purl = ""
-                        time.sleep(0.5)
-                    if not purl:
-                        # 仍失败：用曲名去免费源/其它源找一首替代（保证有声音）
-                        title_for_fallback = ""
-                        for (_k, (_t, cands)) in _VKEYS_CACHE.items():
-                            if not isinstance(cands, list):
-                                continue
-                            for c in cands:
-                                if str(c.get("id")) == str(song_id):
-                                    title_for_fallback = c.get("name", "")
-                                    break
-                            if title_for_fallback:
-                                break
-                        if title_for_fallback:
-                            log("tx resolution failed, retry by title %r" % title_for_fallback)
-                            for alt in vkeys_search(title_for_fallback, "", 6):
-                                alt_id = alt.get("id", "")
-                                if not alt_id.startswith("tx") or alt_id == song_id:
-                                    continue
-                                alt_url = vkeys_play_url(alt_id, force=True)
-                                if alt_url and probe_any(alt_url):
-                                    song_id, purl = alt_id, alt_url
-                                    log("fallback to %s for %r" % (alt_id, title_for_fallback))
-                                    break
-                elif song_id.startswith("kw"):
-                    purl = kuwo_play_url(song_id)
-                else:
-                    purl = resolve_play_url(song_id)
-                if not (purl and probe_any(purl)):
-                    self._send_json(404, {"error": "not_playable"})
-                    return
-                for (_k, (_ts, cands)) in _SEARCH_CACHE.items():
-                    for c in cands:
-                        if str(c.get("id")) == song_id:
-                            title = c.get("name", "")
-                            artist_name = c.get("artist", "")
-                            break
-                    if title:
-                        break
-            else:
-                if not song and MUSIC_PROVIDER != "free":
-                    self._send_json(400, {"error": "missing song"})
-                    return
+            if not song_id:
                 ordered = free_pick(free_candidates(song, artist, 6), song, artist)
-                if not ordered or MUSIC_PROVIDER == "tencent":
-                    ordered = vkeys_pick(vkeys_search(song, artist, 6), song, artist)
-                if not ordered:
-                    ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
-                if not ordered:
-                    ordered = search_candidates(song, artist)
                 if not ordered:
                     self._send_json(404, {"error": "song not found"})
                     return
-                chosen = None
-                trial_choice = None
-                log("stream_ogg by-name %r: %d candidate(s), provider=%s" % (song, len(ordered), MUSIC_PROVIDER))
-                for c in ordered:
-                    cid = str(c.get("id", ""))
-                    free_src = cid.startswith(("cc", "ik"))
-                    log("  try %s (%s)" % (cid, c.get("name", "")))
-                    if free_src:
-                        p = free_url(cid)
-                    elif cid.startswith("tx"):
-                        if vkeys_trial_only(cid):
-                            if trial_choice is None:
-                                trial_choice = (c, vkeys_play_url(cid))
-                            continue
-                        p = vkeys_play_url(cid)
-                    elif cid.startswith("kw"):
-                        p = kuwo_play_url(cid)
-                    else:
-                        p = resolve_play_url(cid)
-                    if not p:
-                        continue
-                    if free_src or probe_any(p):
-                        # CC 静态文件不做 Range 探测（ccMixter 会限流），交给转码校验
-                        chosen = (c, p)
-                        break
-                if chosen is None and trial_choice and trial_choice[1]:
-                    chosen = trial_choice   # 实在没有完整版，退回试听并打日志
-                    trial_mode = True
-                    expected = 0
-                    log("only trial available for %r" % (song,))
-                if not chosen:
-                    self._send_json(404, {"error": "no playable stream"})
-                    return
-                c, purl = chosen
-                song_id = str(c["id"])
-                title = c.get("name", "")
-                artist_name = c.get("artist", "")
-            expected = 0
-            for (_k, (_t, cands)) in _VKEYS_CACHE.items():
-                if not isinstance(cands, list):
-                    continue
-                for c in cands:
-                    if str(c.get("id")) == str(song_id):
-                        expected = int(c.get("duration") or 0)
-                        break
-                if expected:
-                    break
-            for (_k, (_t, cands)) in _KUWO_CACHE.items():
-                if not isinstance(cands, list):
-                    continue
-                for c in cands:
-                    if str(c.get("id")) == str(song_id):
-                        expected = int(c.get("duration") or 0)
-                        break
-                if expected:
-                    break
-
-            trial_mode = False
-            if song_id.startswith("tx") and vkeys_trial_only(song_id):
-                trial_mode = True       # VIP 歌曲：免费源只有 60s 试听，仍然播出来
-                expected = 0            # 不做时长校验
-                log("playing trial clip for %r (VIP)" % (title or song,))
-
-            # 若后台正在转码同一首，等它完成（最多 90s），避免设备端 25s 超时失败
+                song_id = str(ordered[0]["id"])
+                title, artist_name = ordered[0].get("name", ""), ordered[0].get("artist", "")
+            purl = free_url(song_id)
+            if not purl:
+                self._send_json(404, {"error": "not_found"})
+                return
+            meta = free_meta(song_id)
+            title = title or meta.get("name", "")
+            artist_name = artist_name or meta.get("artist", "")
             waited = 0
             while _OGG_BUILDING.get(str(song_id)) and waited < 90:
                 time.sleep(1.0)
                 waited += 1
-            if waited:
-                log("waited %ds for prewarm %s" % (waited, song_id))
-
-            ogg = build_ogg(song_id, purl, expected)
-            if not ogg and song_id.startswith("kw"):
-                # 酷我未登录只给 ~11s 试听 → 用同名歌去网易云找完整音源
-                log("kuwo clip rejected, falling back to netease for %r" % (title or song,))
-                for c in search_candidates(title or song, artist_name or artist, True):
-                    p2 = resolve_play_url(c["id"])
-                    if not (p2 and probe_range(p2)):
-                        continue
-                    ogg = build_ogg(str(c["id"]), p2, expected)
-                    if ogg:
-                        song_id = str(c["id"])
-                        purl = p2
-                        if not title:
-                            title = c.get("name", "")
-                        break
+            ogg = build_ogg(song_id, purl, 0)
             if not ogg:
-                self._send_json(503, {"error": "no_full_stream",
-                                      "hint": "only VIP trial clips available for this song; "
-                                              "ask the user to pick another version"})
+                self._send_json(503, {"error": "transcode_failed"})
                 return
             try:
                 with open(ogg, "rb") as fh:
@@ -1464,28 +1494,37 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._send_json(500, {"error": "cache_read_failed"})
                 return
-            print("[music] stream_ogg id=%s title=%r bytes=%d" % (song_id, title, len(data)), flush=True)
             self.send_response(200)
             self.send_header("Content-Type", "audio/ogg")
             self.send_header("Content-Length", str(len(data)))
-            if trial_mode:
-                self.send_header("X-Trial-Clip", "1")
             self.send_header("X-Song-Title", urllib.parse.quote(title or ""))
             self.send_header("X-Song-Artist", urllib.parse.quote(artist_name or ""))
             self.end_headers()
             self.wfile.write(data)
             return
 
-        # ---- 新增：歌词 JSON ----
-        m = re.match(r"^/lyric_json/(tx|kw)?(\d+)$", path)
+        if path == "/stream_pcm":
+            song = (params.get("song") or [""])[0]
+            artist = (params.get("artist") or [""])[0]
+            ordered = free_pick(free_candidates(song, artist, 6), song, artist)
+            if not ordered:
+                self._send_json(404, {"error": "song not found"})
+                return
+            c = ordered[0]
+            purl = free_url(c["id"])
+            if not purl:
+                self._send_json(404, {"error": "not_found"})
+                return
+            self._send_json(200, {
+                "artist": c.get("artist", ""), "title": c.get("name", ""),
+                "audio_url": purl, "lyric_url": "",
+            })
+            return
+
+        m = re.match(r"^/lyric_json/(cc|ik)?(\d*)$", path)
         if m:
-            if m.group(1) == "tx":
-                lrc = vkeys_lyric_lrc(m.group(2))
-            elif m.group(1) == "kw":
-                lrc = kuwo_lyric_lrc(m.group(2))
-            else:
-                lrc = fetch_lyric(m.group(2))
-            self._send_json(200, {"id": (m.group(1) or "") + m.group(2), "lines": lrc_to_json(lrc)})
+            # 免费源（CC 曲目）没有 LRC 歌词
+            self._send_json(200, {"id": (m.group(1) or "") + (m.group(2) or ""), "lines": []})
             return
 
         # ---- 新增：股票行情 / 搜索 ----
@@ -1515,12 +1554,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "missing song"})
                 return
             ordered = free_pick(free_candidates(song, artist, 6), song, artist)
-            if not ordered or MUSIC_PROVIDER == "tencent":
-                ordered = vkeys_pick(vkeys_search(song, artist, 6), song, artist)
-            if not ordered:
-                ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
-            if not ordered:
-                ordered = search_candidates(song, artist)
             if not ordered:
                 self._send_json(404, {"error": "song not found"})
                 return
@@ -1576,26 +1609,21 @@ class Handler(BaseHTTPRequestHandler):
             if not song and MUSIC_PROVIDER != "free":
                 self._send_json(400, {"error": "missing song"})
                 return
-            # 首选无版权限制的免费源（ccMixter / Incompetech）
+            # 只使用无版权限制的免费源（ccMixter / Incompetech）
             # song 为空时 = "随便放首歌"，走内置 CC 曲库（随机）
             ordered = free_pick(free_candidates(song, artist, max(limit + 3, 6)), song, artist)
-            # 其次腾讯(vkeys 公共 API)
-            if not ordered or MUSIC_PROVIDER == "tencent":
-                ordered = vkeys_pick(vkeys_search(song, artist, max(limit + 3, 6)), song, artist)
             # 其次酷我（官方版本命中率高），最后退回网易云
             if not ordered:
-                ordered = kuwo_pick(kuwo_search(song, artist), song, artist)
-            if not ordered:
-                ordered = search_candidates(song, artist)
-            if not ordered:
-                self._send_json(404, {"error": "song not found"})
+                self._send_json(404, {"error": "song not found",
+                                      "hint": "only free/CC catalog is available"})
                 return
             page = ordered[offset:offset + limit]
             # 并发探测每个候选是否可播放（有缓存），标记 VIP/无法播放的
             def _playable(c):
                 cid = str(c.get("id", ""))
                 if cid.startswith(("cc", "ik")):
-                    return True   # CC 授权，直接可完整播放（实际拉流时还会校验）
+                    return True   # CC 授权，直接可完整播放
+                return True
                 if cid.startswith("tx"):
                     # 必须真的拿到 url 才算可播（有的 id 在 vkeys 里就是没有详情）
                     try:
@@ -1620,11 +1648,208 @@ class Handler(BaseHTTPRequestHandler):
             for i, c in enumerate(page):
                 cid = str(c["id"])
                 trial = False
+                items.append({
+                    "index": offset + i + 1,   # 1-based 序号，给用户报"第几个"
+                    "id": cid,
+                    "name": c.get("name", ""),
+                    "artist": c.get("artist", ""),
+                    "album": c.get("album", ""),
+                    "duration_ms": c.get("duration", 0),
+                    "playable": playable_map.get(cid, False),
+                    "trial": trial,           # true = 只有 60 秒试听（VIP），仍可播放
+                })
+            # 预热：后台转码前两个可播放候选（点播时即可秒开；CC 下载慢，尤其需要）
+            # 只预热一首：并发预热会争抢带宽导致双方都超时
+            for it in items:
+                if it.get("playable"):
+                    threading.Thread(target=_prewarm_ogg, args=(it["id"],), daemon=True).start()
+                    break
+            print(f"[music] search song={song!r} artist={artist!r} offset={offset} "
+                  f"total={len(ordered)} items={len(items)}", flush=True)
+            self._send_json(200, {
+                "song": song,
+                "total": len(ordered),
+                "offset": offset,
+                "count": len(items),
+                "has_more": offset + len(items) < len(ordered),
+                "items": items,
+            })
+            return
+
+        # 按网易云 song_id 直接取可播放地址（选中后调用）
+        if path == "/play":
+            song_id = (params.get("id") or [""])[0]
+            if not song_id:
+                self._send_json(400, {"error": "missing id"})
+                return
+            if song_id.startswith("lb"):
+                rel = lib_url(song_id)
+                if not rel:
+                    self._send_json(404, {"error": "not_found"})
+                    return
+                meta = lib_meta(song_id)
+                host = self.headers.get("Host") or ("47.116.199.150:%d" % PORT)
+                self._send_json(200, {
+                    "id": song_id,
+                    "title": meta.get("name", ""),
+                    "artist": meta.get("artist", ""),
+                    "album": meta.get("album", ""),
+                    "audio_url": "http://%s%s" % (host, rel),
+                    "license": meta.get("album", ""),
+                })
+                return
+            if not song_id.startswith(("cc", "ik")):
+                self._send_json(400, {"error": "only_free_sources",
+                                      "hint": "this build only serves CC-licensed music"})
+                return
+            purl = free_url(song_id)
+            if not purl:
+                self._send_json(404, {"error": "not_found"})
+                return
+            meta = free_meta(song_id)
+            self._send_json(200, {
+                "id": song_id,
+                "title": meta.get("name", ""),
+                "artist": meta.get("artist", ""),
+                "album": meta.get("album", ""),
+                "duration_ms": meta.get("duration", 0),
+                "audio_url": purl,
+                "license": meta.get("album", ""),
+            })
+            return
+
+        m = re.match(r"^/lyric_json/(tx|kw)?(\d+)$", path)
+        if m:
+            if m.group(1) == "tx":
+                lrc = vkeys_lyric_lrc(m.group(2))
+            elif m.group(1) == "kw":
+                lrc = kuwo_lyric_lrc(m.group(2))
+            else:
+                lrc = fetch_lyric(m.group(2))
+            self._send_json(200, {"id": (m.group(1) or "") + m.group(2), "lines": lrc_to_json(lrc)})
+            return
+
+        # ---- 新增：股票行情 / 搜索 ----
+        if path == "/stock/quote":
+            code = (params.get("code") or params.get("ticker") or [""])[0]
+            info = fetch_stock_quote(code)
+            if not info:
+                self._send_json(404, {"error": "quote_not_found", "code": code})
+                return
+            print("[stock] quote %s -> %s %s" % (code, info.get("name"), info.get("price")), flush=True)
+            self._send_json(200, info)
+            return
+
+        if path == "/stock/search":
+            kw = (params.get("q") or params.get("keyword") or [""])[0]
+            if not kw:
+                self._send_json(400, {"error": "missing q"})
+                return
+            self._send_json(200, {"keyword": kw, "items": fetch_stock_search(kw)})
+            return
+
+        if path == "/stream_pcm":
+            song = (params.get("song") or [""])[0]
+            artist = (params.get("artist") or [""])[0]
+            print(f"[music] stream_pcm song={song!r} artist={artist!r}", flush=True)
+            if not song and MUSIC_PROVIDER != "free":
+                self._send_json(400, {"error": "missing song"})
+                return
+            ordered = free_pick(free_candidates(song, artist, 6), song, artist)
+            if not ordered:
+                self._send_json(404, {"error": "song not found"})
+                return
+
+            chosen = None
+            chosen_by = "kuwo"
+            for c in ordered:
+                cid = str(c.get("id", ""))
+                if cid.startswith(("cc", "ik")):
+                    purl = free_url(cid)
+                elif cid.startswith("tx"):
+                    if vkeys_trial_only(cid):
+                        continue
+                    purl = vkeys_play_url(cid)
+                elif cid.startswith("kw"):
+                    purl = kuwo_play_url(cid)
+                else:
+                    purl = resolve_play_url(cid)
+                if cid.startswith(("cc", "ik")):
+                    if purl:
+                        chosen = {"info": c, "url": purl}
+                        break
+                elif purl and probe_any(purl):
+                    chosen = {"info": c, "url": purl}
+                    break
+            if not chosen:
+                self._send_json(404, {"error": "no playable stream"})
+                return
+            song_key = str(chosen["info"]["id"])
+            payload = {
+                "artist": chosen["info"]["artist"],
+                "title": chosen["info"]["name"],
+                "audio_url": chosen["url"],
+                "lyric_url": f"{BASE_URL}/lyric/{song_key}.lrc",
+            }
+            print(f"[music] stream_pcm chosen: title={chosen['info']['name']!r} "
+                  f"artist={chosen['info']['artist']!r} id={song_key} by={chosen_by}", flush=True)
+            self._send_json(200, payload)
+            return
+
+        # 候选列表：一次返回最多 PAGE（默认5）个，供用户语音选择
+        if path == "/search":
+            song = (params.get("song") or [""])[0]
+            artist = (params.get("artist") or [""])[0]
+            try:
+                offset = int((params.get("offset") or ["0"])[0])
+                limit = int((params.get("limit") or ["5"])[0])
+            except ValueError:
+                self._send_json(400, {"error": "bad offset/limit"})
+                return
+            limit = max(1, min(limit, 10))
+            offset = max(0, offset)
+            if not song and MUSIC_PROVIDER != "free":
+                self._send_json(400, {"error": "missing song"})
+                return
+            # 只使用无版权限制的免费源（ccMixter / Incompetech）
+            # song 为空时 = "随便放首歌"，走内置 CC 曲库（随机）
+            ordered = free_pick(free_candidates(song, artist, max(limit + 3, 6)), song, artist)
+            # 其次酷我（官方版本命中率高），最后退回网易云
+            if not ordered:
+                self._send_json(404, {"error": "song not found",
+                                      "hint": "only free/CC catalog is available"})
+                return
+            page = ordered[offset:offset + limit]
+            # 并发探测每个候选是否可播放（有缓存），标记 VIP/无法播放的
+            def _playable(c):
+                cid = str(c.get("id", ""))
+                if cid.startswith(("cc", "ik")):
+                    return True   # CC 授权，直接可完整播放
+                return True
                 if cid.startswith("tx"):
+                    # 必须真的拿到 url 才算可播（有的 id 在 vkeys 里就是没有详情）
                     try:
-                        trial = vkeys_trial_only(cid)
+                        return bool(vkeys_play_url(cid))
                     except Exception:
-                        trial = False
+                        return False
+                if c.get("provider") == "kuwo" or cid.startswith("kw"):
+                    return kuwo_is_playable(cid)
+                return is_playable(cid)
+
+            # vkeys 限流：串行探测前 3 个，其余默认按可播处理（播放时会再校验）
+            playable_map = {}
+            probed = 0
+            for c in page:
+                cid = str(c.get("id", ""))
+                if probed < 3:
+                    playable_map[cid] = _playable(c)
+                    probed += 1
+                else:
+                    playable_map[cid] = True
+            items = []
+            for i, c in enumerate(page):
+                cid = str(c["id"])
+                trial = False
                 items.append({
                     "index": offset + i + 1,   # 1-based 序号，给用户报"第几个"
                     "id": cid,
@@ -1675,8 +1900,14 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
             if song_id.startswith("tx"):
-                purl = vkeys_play_url(song_id)
-                if not (purl and probe_any(purl)):
+                purl = ""
+                for attempt in range(3):
+                    purl = vkeys_play_url(song_id, force=(attempt > 0))
+                    if purl and probe_any(purl):
+                        break
+                    purl = ""
+                    time.sleep(0.5)
+                if not purl:
                     self._send_json(404, {"error": "not_playable"})
                     return
                 d = _tx_detail(song_id) or {}
