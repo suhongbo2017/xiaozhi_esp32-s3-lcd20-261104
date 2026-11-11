@@ -360,7 +360,7 @@ def build_ogg(song_id, audio_url, expected_ms=0):
             "-headers",
             "Referer: %s\r\nUser-Agent: %s\r\n" % (referer, NETEASE_UA),
             "-i", audio_url,
-            "-vn", "-ac", "1", "-ar", "24000",
+            "-vn", "-t", "300", "-ac", "1", "-ar", "24000",
             "-c:a", "libopus", "-b:a", "32k", "-application", "audio",
             "-f", "ogg", tmp,
         ]
@@ -400,6 +400,13 @@ def _prewarm_ogg(song_id):
     """后台把某首歌转成 OGG，避免用户点播时等转码"""
     try:
         if os.path.exists(_ogg_path(song_id)) and os.path.getsize(_ogg_path(song_id)) > 1024:
+            return
+        sid = str(song_id)
+        if sid.startswith(("cc", "ik")):
+            u = free_url(sid)
+            if u:
+                build_ogg(sid, u, 0)
+                log("prewarm free done %s" % sid)
             return
         purl = resolve_play_url(song_id)
         if purl and probe_range(purl):
@@ -739,8 +746,18 @@ _VKEYS_CACHE = {}
 _VKEYS_TTL = 30 * 60
 
 
-def _http_get_text_utf8(url, timeout=15):
-    """vkeys 返回 UTF-8 JSON；不能走 GBK 优先的解码逻辑"""
+def _http_get_text_utf8(url, timeout=15, retries=3):
+    """vkeys 返回 UTF-8 JSON；该 API 偶发 503，带重试"""
+    for attempt in range(retries):
+        body = _http_get_text_utf8_once(url, timeout)
+        if body:
+            return body
+        if attempt < retries - 1:
+            time.sleep(0.4 * (attempt + 1))
+    return ""
+
+
+def _http_get_text_utf8_once(url, timeout=15):
     try:
         host = url.split("/")[2]
         path = "/" + "/".join(url.split("/")[3:])
@@ -809,7 +826,7 @@ def _tx_detail(song_id, force=False):
         tid = tid[2:]
     key = "txid:" + tid
     hit = _VKEYS_CACHE.get(key)
-    if hit and not force and time.time() - hit[0] < 600:
+    if hit and not force and time.time() - hit[0] < 1800:
         return hit[1]
     raw = _http_get_text_utf8(VKEYS_API + "?id=%s" % tid)
     if not raw:
@@ -819,7 +836,7 @@ def _tx_detail(song_id, force=False):
         data = d.get("data")
         if isinstance(data, list):
             data = data[0] if data else None
-        if isinstance(data, dict):
+        if isinstance(data, dict) and data.get("url"):
             _VKEYS_CACHE[key] = (time.time(), data)
             return data
     except Exception:
@@ -1101,10 +1118,10 @@ def probe_free(url):
 
 
 def probe_any(url):
-    """cc/ik 需要 Referer，其它源用普通探测"""
+    """所有源统一走"带正确 Referer"的探测（QQ/酷我/ccMixter 都会校验 Referer）"""
     if not url:
         return False
-    if "ccmixter" in url or "incompetech" in url:
+    if any(k in url for k in ("ccmixter", "incompetech", "qqmusic", "stream.qq", "kuwo")):
         return probe_free(url)
     return probe_range(url)
 
@@ -1130,15 +1147,40 @@ def free_meta(song_id):
     return {}
 
 
+def free_candidates(song, artist="", limit=6):
+    """CC 候选：ccMixter 命中 + Incompetech 目录（后者兜底，保证有可播项）"""
+    items = list(free_search(song, artist, limit))
+    try:
+        catalog = free_search("", "", 6)   # 空查询 -> 目录随机
+    except Exception:
+        catalog = []
+    have = {i["name"] for i in items}
+    for c in catalog:
+        if c["name"] not in have:
+            items.append(c)
+    return items[:max(limit, 6)]
+
+
 def free_pick(items, song, artist):
     def norm(x):
         return (x or "").lower().replace(" ", "")
 
     title = norm(song)
 
+    def cached(c):
+        try:
+            p = _ogg_path(str(c.get("id", "")))
+            return os.path.exists(p) and os.path.getsize(p) > 1024
+        except Exception:
+            return False
+
     def rank(c):
         name = norm(c["name"])
         r = 0
+        if cached(c):
+            r -= 1000          # 已转码：优先，秒开
+        elif str(c.get("id", "")).startswith("ik"):
+            r -= 200           # 未缓存时优先 Incompetech（CDN 更快，转码更快）
         if title and name == title:
             r -= 100
         elif title and title in name:
@@ -1231,11 +1273,32 @@ class Handler(BaseHTTPRequestHandler):
                 if song_id.startswith(("cc", "ik")):
                     purl = free_url(song_id)
                 elif song_id.startswith("tx"):
-                    purl = vkeys_play_url(song_id)
-                    if not (purl and probe_any(purl)):
-                        # vkey 有有效期，命中缓存可能已过期 -> 强制刷新一次
-                        log("tx url stale for %s, refreshing" % song_id)
-                        purl = vkeys_play_url(song_id, force=True)
+                    purl = ""
+                    for attempt in range(3):
+                        purl = vkeys_play_url(song_id, force=(attempt > 0))
+                        if purl and probe_any(purl):
+                            break
+                        log("tx url attempt %d failed for %s (vkeys 503?), retrying" % (attempt + 1, song_id))
+                        purl = ""
+                        time.sleep(0.5)
+                    if not purl:
+                        # 仍失败：用曲名去免费源/其它源找一首替代（保证有声音）
+                        title_for_fallback = ""
+                        for (_k, (_t, cands)) in _VKEYS_CACHE.items():
+                            if not isinstance(cands, list):
+                                continue
+                            for c in cands:
+                                if str(c.get("id")) == str(song_id):
+                                    title_for_fallback = c.get("name", "")
+                                    break
+                            if title_for_fallback:
+                                break
+                        if title_for_fallback:
+                            log("tx resolution failed, fallback by title %r" % title_for_fallback)
+                            fb = free_pick(free_search(title_for_fallback, "", 3), title_for_fallback, "")
+                            if fb:
+                                song_id = fb[0]["id"]
+                                purl = free_url(song_id)
                 elif song_id.startswith("kw"):
                     purl = kuwo_play_url(song_id)
                 else:
@@ -1255,7 +1318,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not song and MUSIC_PROVIDER != "free":
                     self._send_json(400, {"error": "missing song"})
                     return
-                ordered = free_pick(free_search(song, artist, 6), song, artist)
+                ordered = free_pick(free_candidates(song, artist, 6), song, artist)
                 if not ordered or MUSIC_PROVIDER == "tencent":
                     ordered = vkeys_pick(vkeys_search(song, artist, 6), song, artist)
                 if not ordered:
@@ -1267,13 +1330,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 chosen = None
                 trial_choice = None
+                log("stream_ogg by-name %r: %d candidate(s), provider=%s" % (song, len(ordered), MUSIC_PROVIDER))
                 for c in ordered:
                     cid = str(c.get("id", ""))
-                    if cid.startswith(("cc", "ik")):
+                    free_src = cid.startswith(("cc", "ik"))
+                    log("  try %s (%s)" % (cid, c.get("name", "")))
+                    if free_src:
                         p = free_url(cid)
                     elif cid.startswith("tx"):
                         if vkeys_trial_only(cid):
-                            # 记住这个试听候选，若后面没有完整版再退回它
                             if trial_choice is None:
                                 trial_choice = (c, vkeys_play_url(cid))
                             continue
@@ -1282,7 +1347,10 @@ class Handler(BaseHTTPRequestHandler):
                         p = kuwo_play_url(cid)
                     else:
                         p = resolve_play_url(cid)
-                    if p and probe_range(p):
+                    if not p:
+                        continue
+                    if free_src or probe_any(p):
+                        # CC 静态文件不做 Range 探测（ccMixter 会限流），交给转码校验
                         chosen = (c, p)
                         break
                 if chosen is None and trial_choice and trial_choice[1]:
@@ -1322,6 +1390,14 @@ class Handler(BaseHTTPRequestHandler):
                 trial_mode = True       # VIP 歌曲：免费源只有 60s 试听，仍然播出来
                 expected = 0            # 不做时长校验
                 log("playing trial clip for %r (VIP)" % (title or song,))
+
+            # 若后台正在转码同一首，等它完成（最多 90s），避免设备端 25s 超时失败
+            waited = 0
+            while _OGG_BUILDING.get(str(song_id)) and waited < 90:
+                time.sleep(1.0)
+                waited += 1
+            if waited:
+                log("waited %ds for prewarm %s" % (waited, song_id))
 
             ogg = build_ogg(song_id, purl, expected)
             if not ogg and song_id.startswith("kw"):
@@ -1399,7 +1475,7 @@ class Handler(BaseHTTPRequestHandler):
             if not song and MUSIC_PROVIDER != "free":
                 self._send_json(400, {"error": "missing song"})
                 return
-            ordered = free_pick(free_search(song, artist, 6), song, artist)
+            ordered = free_pick(free_candidates(song, artist, 6), song, artist)
             if not ordered or MUSIC_PROVIDER == "tencent":
                 ordered = vkeys_pick(vkeys_search(song, artist, 6), song, artist)
             if not ordered:
@@ -1424,7 +1500,11 @@ class Handler(BaseHTTPRequestHandler):
                     purl = kuwo_play_url(cid)
                 else:
                     purl = resolve_play_url(cid)
-                if purl and probe_any(purl):
+                if cid.startswith(("cc", "ik")):
+                    if purl:
+                        chosen = {"info": c, "url": purl}
+                        break
+                elif purl and probe_any(purl):
                     chosen = {"info": c, "url": purl}
                     break
             if not chosen:
@@ -1459,7 +1539,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # 首选无版权限制的免费源（ccMixter / Incompetech）
             # song 为空时 = "随便放首歌"，走内置 CC 曲库（随机）
-            ordered = free_pick(free_search(song, artist, max(limit + 3, 6)), song, artist)
+            ordered = free_pick(free_candidates(song, artist, max(limit + 3, 6)), song, artist)
             # 其次腾讯(vkeys 公共 API)
             if not ordered or MUSIC_PROVIDER == "tencent":
                 ordered = vkeys_pick(vkeys_search(song, artist, max(limit + 3, 6)), song, artist)
@@ -1478,7 +1558,11 @@ class Handler(BaseHTTPRequestHandler):
                 if cid.startswith(("cc", "ik")):
                     return True   # CC 授权，直接可完整播放（实际拉流时还会校验）
                 if cid.startswith("tx"):
-                    return vkeys_is_playable(cid)   # 仅查 detail(缓存)，不做 range 探测
+                    # vkeys 偶发 503；detail 拿不到时乐观标记可播，播放时再严格校验
+                    try:
+                        return bool(vkeys_play_url(cid)) or True
+                    except Exception:
+                        return True
                 if c.get("provider") == "kuwo" or cid.startswith("kw"):
                     return kuwo_is_playable(cid)
                 return is_playable(cid)
@@ -1490,6 +1574,12 @@ class Handler(BaseHTTPRequestHandler):
             items = []
             for i, c in enumerate(page):
                 cid = str(c["id"])
+                trial = False
+                if cid.startswith("tx"):
+                    try:
+                        trial = vkeys_trial_only(cid)
+                    except Exception:
+                        trial = False
                 items.append({
                     "index": offset + i + 1,   # 1-based 序号，给用户报"第几个"
                     "id": cid,
@@ -1498,12 +1588,16 @@ class Handler(BaseHTTPRequestHandler):
                     "album": c.get("album", ""),
                     "duration_ms": c.get("duration", 0),
                     "playable": playable_map.get(cid, False),
+                    "trial": trial,           # true = 只有 60 秒试听（VIP），仍可播放
                 })
-            # 预热：后台转码第一个可播放候选（点播时即可秒开）
+            # 预热：后台转码前两个可播放候选（点播时即可秒开；CC 下载慢，尤其需要）
+            started = 0
             for it in items:
                 if it.get("playable"):
                     threading.Thread(target=_prewarm_ogg, args=(it["id"],), daemon=True).start()
-                    break
+                    started += 1
+                    if started >= 2:
+                        break
             print(f"[music] search song={song!r} artist={artist!r} offset={offset} "
                   f"total={len(ordered)} items={len(items)}", flush=True)
             self._send_json(200, {

@@ -1246,7 +1246,7 @@ bool Application::StartMusicNow(const std::string& audio_url, const std::vector<
     }
 
     /* 音乐首次点播时服务端可能正在转码，放宽拉流超时到 25s */
-    notify_player_.SetHttpTimeout(25000);
+    notify_player_.SetHttpTimeout(120000);   /* CC 曲目首播需服务端转码，放宽到 120s */
 
     bool started = notify_player_.Start(
         audio_url, std::vector<NotifySubtitle>(lyrics), playback_id,

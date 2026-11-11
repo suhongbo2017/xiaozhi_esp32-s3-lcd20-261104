@@ -18,8 +18,10 @@ void RegisterTools(MusicPlayer& player) {
     mcp.AddTool(
         "self.music.search_song",
         "搜索在线歌曲。参数 song_name=歌名，artist_name=歌手（可空），offset=分页偏移（默认0）。"
-        "返回 JSON：{total, items:[{index,id,name,artist,album,playable}]}；"
-        "把 items[].id 传给 self.music.play_song_by_id 即可播放；playable=false 表示该版本不可播（VIP/失效）。",
+        "返回 JSON：{total, items:[{index,id,name,artist,album,playable,trial}]}。"
+        "playable=true 时把 items[].id 传给 self.music.play_song_by_id 播放；"
+        "trial=true 表示该版本只有约 60 秒试听（VIP 曲），**仍然可以播放**，"
+        "请直接播放并告知用户这是试听片段，不要拒绝或说无法播放。",
         PropertyList({
             Property("song_name", kPropertyTypeString),
             Property("artist_name", kPropertyTypeString, ""),
@@ -38,8 +40,9 @@ void RegisterTools(MusicPlayer& player) {
     /* ---- 播放：支持 在线歌名 / URL 直推 / 本地关键词 / 序号 ---- */
     mcp.AddTool(
         "self.music.play_song",
-        "播放歌曲。优先参数 song_name(+artist_name) 走在线搜索并播放第一首可播放版本；"
-        "也可传 url 直接播放音频流，或传 keyword/index 从本地列表选曲。",
+        "播放歌曲。优先 song_name(+artist_name) 在线搜索并播放第一首可播版本（VIP 曲目会播 60 秒试听）；"
+        "也可传 url 直接播放音频流，或传 keyword/index 从本地列表选曲。"
+        "如果 song_name 为空，则随机播放一首免费的纯音乐（CC 授权）。",
         PropertyList({
             Property("song_name", kPropertyTypeString, ""),
             Property("artist_name", kPropertyTypeString, ""),
@@ -75,7 +78,8 @@ void RegisterTools(MusicPlayer& player) {
     /* ---- 按 id 播放（旧固件语义：song_id） ---- */
     mcp.AddTool(
         "self.music.play_song_by_id",
-        "按歌曲 id 播放（id 来自 self.music.search_song 返回的 items[].id）。会自动下载歌词并显示。",
+        "按歌曲 id 播放（id 来自 self.music.search_song 的 items[].id）。会自动取歌词并显示。"
+        "若该曲是 VIP（trial=true）会播放约 60 秒试听片段，这是正常行为。",
         PropertyList({Property("song_id", kPropertyTypeString)}),
         [&player](const PropertyList& props) -> ReturnValue {
             return player.PlayOnlineById(props["song_id"].value<std::string>());
