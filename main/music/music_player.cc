@@ -218,6 +218,12 @@ void MusicPlayer::RememberSong(const std::string& id, const std::string& title,
     }
 }
 
+void MusicPlayer::SetOnlineQueue(const std::vector<std::string>& ids, size_t current) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    online_queue_ = ids;
+    online_index_ = current;
+}
+
 bool MusicPlayer::SearchOnline(const std::string& song, const std::string& artist, int offset,
                                std::string* out_json) {
     std::vector<MusicApiClient::SongItem> items;
@@ -268,9 +274,7 @@ bool MusicPlayer::PlayOnlineById(const std::string& song_id) {
 }
 
 bool MusicPlayer::PlayOnline(const std::string& song, const std::string& artist) {
-    if (song.empty()) {
-        return false;
-    }
+    /* song 为空 = "随便放首歌"，服务端会返回 CC 曲库随机曲目 */
     std::vector<MusicApiClient::SongItem> items;
     auto& api = MusicApiClient::GetInstance();
     if (!api.Search(song, artist, 0, &items, nullptr)) {
@@ -278,21 +282,41 @@ bool MusicPlayer::PlayOnline(const std::string& song, const std::string& artist)
         return false;
     }
     const MusicApiClient::SongItem* chosen = nullptr;
+    std::vector<std::string> ids;
+    size_t chosen_index = 0;
     for (const auto& it : items) {
         RememberSong(it.id, it.name, it.artist, 0);
         if (chosen == nullptr && it.playable) {
             chosen = &it;
+            chosen_index = ids.size();
         }
+        ids.push_back(it.id);
     }
     if (chosen == nullptr) {
         chosen = &items.front(); /* 都不可播放也试一次（服务端会再判） */
+        chosen_index = 0;
     }
+    SetOnlineQueue(ids, chosen_index);
     ESP_LOGI(TAG, "online play: '%s - %s' (id=%s, playable=%d)", chosen->name.c_str(),
              chosen->artist.c_str(), chosen->id.c_str(), chosen->playable);
     return PlayOnlineById(chosen->id);
 }
 
 bool MusicPlayer::Next() {
+    std::string next_id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (playlist_.empty() && !online_queue_.empty()) {
+            const size_t next =
+                (online_index_ == SIZE_MAX) ? 0 : (online_index_ + 1) % online_queue_.size();
+            online_index_ = next;
+            next_id = online_queue_[next];
+        }
+    }
+    if (!next_id.empty()) {
+        return PlayOnlineById(next_id);   /* 在线队列：下一首 */
+    }
+
     size_t index;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -309,6 +333,21 @@ bool MusicPlayer::Next() {
 }
 
 bool MusicPlayer::Prev() {
+    std::string prev_id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (playlist_.empty() && !online_queue_.empty()) {
+            const size_t prev = (online_index_ == SIZE_MAX || online_index_ == 0)
+                                    ? online_queue_.size() - 1
+                                    : online_index_ - 1;
+            online_index_ = prev;
+            prev_id = online_queue_[prev];
+        }
+    }
+    if (!prev_id.empty()) {
+        return PlayOnlineById(prev_id);
+    }
+
     size_t index;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -385,7 +424,7 @@ void MusicPlayer::EnsurePage() {
     }
     page->Show(track.title.c_str(), track.artist.c_str());
     if (mode == 0) {
-        page->SetLyric("", "", track.lyrics.empty() ? "" : "", "", "");
+        page->SetLyric("", "", track.lyrics.empty() ? "♪ 纯音乐（CC 授权，可免费播放）" : "", "", "");
     }
     page->SetProgress(0, track.duration_ms);
 }

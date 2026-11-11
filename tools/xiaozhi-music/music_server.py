@@ -919,20 +919,32 @@ CC_ZH_MAP = [
     ("流行", "pop"), ("民谣", "folk"), ("古典", "classical"),
 ]
 
-# Incompetech 精选（CC-BY 4.0，作者 Kevin MacLeod），可直接播放
+# Incompetech 精选（CC BY 4.0，作者 Kevin MacLeod），全部 URL 已 200 校验
+# 字段：标题 / 中文风格标签（用于匹配"钢琴曲/轻音乐/搞笑…"这类查询）
 IK_CATALOG = [
-    ("Monkeys Spinning Monkeys", "欢快 搞笑 背景"),
-    ("Carefree", "轻快 尤克里里"),
-    ("Sneaky Snitch", "滑稽 悬疑 喜剧"),
-    ("Wallpaper", "轻快 复古"),
-    ("Fluffing a Duck", "俏皮 欢快"),
-    ("Investigations", "悬疑 探案"),
-    ("Local Forecast", "轻松 商务"),
-    ("Life of Riley", "欢快 民谣"),
-    ("Fig Leaf Rag", "复古 拉格泰姆"),
-    ("Happy Alley", "开心 明亮"),
-    ("Bossa Antigua", "波萨诺瓦 慵懒"),
-    ("Airport Lounge", "沙发音乐 放松"),
+    ("Monkeys Spinning Monkeys", "欢快 搞笑 滑稽 背景 纯音乐"),
+    ("Carefree", "轻快 欢快 尤克里里 纯音乐"),
+    ("Sneaky Snitch", "滑稽 悬疑 喜剧 搞笑"),
+    ("Wallpaper", "轻快 复古 纯音乐"),
+    ("Fluffing a Duck", "俏皮 欢快 搞笑"),
+    ("Investigations", "悬疑 探案 紧张"),
+    ("Local Forecast", "轻松 商务 纯音乐"),
+    ("Life of Riley", "欢快 民谣 纯音乐"),
+    ("Fig Leaf Rag", "复古 拉格泰姆 钢琴"),
+    ("Happy Alley", "开心 明亮 纯音乐"),
+    ("Bossa Antigua", "波萨诺瓦 慵懒 放松 爵士"),
+    ("Airport Lounge", "沙发音乐 放松 慵懒 爵士"),
+    ("George Street Shuffle", "爵士 摇摆 轻快"),
+    ("Deliberate Thought", "安静 思考 氛围 纯音乐"),
+    ("Fretless", "舒缓 吉他 纯音乐"),
+    ("Gymnopedie No 1", "古典 钢琴 安静 舒缓"),
+    ("Hall of the Mountain King", "古典 紧张 戏剧"),
+    ("Quirky Dog", "俏皮 搞笑 欢快"),
+    ("Rocket Power", "动感 电子 欢快"),
+    ("Sardana", "民族 欢快 舞曲"),
+    ("Shiny Tech", "科技 电子 明亮"),
+    ("Spazzmatica Polka", "幽默 快节奏 波尔卡"),
+    ("Wagon Wheel", "民谣 乡村 轻松"),
 ]
 
 
@@ -1006,14 +1018,17 @@ def free_search(song, artist="", limit=10):
     if not is_genre:
         log("ccmixter has no match for %r (specific song) -> let upper layer fall back" % (song,))
         return []
+    # 风格类查询：打散顺序，避免每次都放同一首
+    import random as _random
 
     # 兜底：Incompetech 精选（风格类查询用内置 CC-BY 目录）
     q = (song or "").strip().lower()
     items = []
+    qtags = [t.strip() for t in _cc_translate(q).replace(",", " ").split() if t.strip()]
+    matched, others = [], []
     for i, (title, tags) in enumerate(IK_CATALOG):
-        if q and (q in title.lower() or any(t in tags for t in _cc_translate(q).split())):
-            pass
-        items.append({
+        hit = bool(qtags) and any(t in tags or t in title.lower() for t in qtags)
+        entry = {
             "id": "ik%d" % i,
             "name": title,
             "artist": "Kevin MacLeod",
@@ -1023,8 +1038,12 @@ def free_search(song, artist="", limit=10):
             "score": 0,
             "_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/%s.mp3"
                     % urllib.parse.quote(title),
-        })
-    log("ccmixter empty for %r -> incompetech catalog %d" % (kw, len(items)))
+        }
+        (matched if hit else others).append(entry)
+    _random.shuffle(matched)
+    _random.shuffle(others)
+    items = matched + others
+    log("ccmixter empty for %r -> incompetech catalog %d (shuffled)" % (kw, len(items)))
     return items[:limit]
 
 
@@ -1233,7 +1252,7 @@ class Handler(BaseHTTPRequestHandler):
                     if title:
                         break
             else:
-                if not song:
+                if not song and MUSIC_PROVIDER != "free":
                     self._send_json(400, {"error": "missing song"})
                     return
                 ordered = free_pick(free_search(song, artist, 6), song, artist)
@@ -1377,7 +1396,7 @@ class Handler(BaseHTTPRequestHandler):
             song = (params.get("song") or [""])[0]
             artist = (params.get("artist") or [""])[0]
             print(f"[music] stream_pcm song={song!r} artist={artist!r}", flush=True)
-            if not song:
+            if not song and MUSIC_PROVIDER != "free":
                 self._send_json(400, {"error": "missing song"})
                 return
             ordered = free_pick(free_search(song, artist, 6), song, artist)
@@ -1435,10 +1454,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             limit = max(1, min(limit, 10))
             offset = max(0, offset)
-            if not song:
+            if not song and MUSIC_PROVIDER != "free":
                 self._send_json(400, {"error": "missing song"})
                 return
             # 首选无版权限制的免费源（ccMixter / Incompetech）
+            # song 为空时 = "随便放首歌"，走内置 CC 曲库（随机）
             ordered = free_pick(free_search(song, artist, max(limit + 3, 6)), song, artist)
             # 其次腾讯(vkeys 公共 API)
             if not ordered or MUSIC_PROVIDER == "tencent":

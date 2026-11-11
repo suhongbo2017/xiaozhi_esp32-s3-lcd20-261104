@@ -66,6 +66,8 @@ public:
     /** 记住最近一次搜索到的歌曲元信息（id -> title/artist/duration），供 by_id 播放使用 */
     void RememberSong(const std::string& id, const std::string& title, const std::string& artist,
                       uint32_t duration_ms);
+    /** 在线播放队列（在线搜索后填充，供实体键/语音切歌用） */
+    void SetOnlineQueue(const std::vector<std::string>& ids, size_t current);
     void Stop();
     bool Next();
     /** 上一首；未在播放时从头/尾开始播（实体按键用） */
@@ -108,6 +110,8 @@ private:
         uint32_t duration_ms = 0;
     };
     std::vector<std::pair<std::string, SongMeta>> song_cache_;
+    std::vector<std::string> online_queue_;   /* 在线曲目 id 队列 */
+    size_t online_index_ = SIZE_MAX;
 };
 
 #endif  // MUSIC_PLAYER_H
