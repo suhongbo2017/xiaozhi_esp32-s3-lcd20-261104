@@ -803,13 +803,13 @@ def vkeys_search(song, artist="", limit=10):
     return out
 
 
-def _tx_detail(song_id):
+def _tx_detail(song_id, force=False):
     tid = str(song_id)
     if tid.startswith("tx"):
         tid = tid[2:]
     key = "txid:" + tid
     hit = _VKEYS_CACHE.get(key)
-    if hit and time.time() - hit[0] < 600:
+    if hit and not force and time.time() - hit[0] < 600:
         return hit[1]
     raw = _http_get_text_utf8(VKEYS_API + "?id=%s" % tid)
     if not raw:
@@ -827,15 +827,16 @@ def _tx_detail(song_id):
     return None
 
 
-def vkeys_play_url(song_id):
-    d = _tx_detail(song_id)
+def vkeys_play_url(song_id, force=False):
+    d = _tx_detail(song_id, force)
     if not d:
         return ""
     url = d.get("url") or ""
     if not url.startswith("http"):
         return ""
-    info = _tx_detail(song_id) or {}
-    log("tencent url id=%s quality=%s kbps=%s" % (song_id, info.get("quality"), info.get("kbps")))
+    info = _tx_detail(song_id, force) or {}
+    log("tencent url id=%s quality=%s kbps=%s (force=%s)" % (song_id, info.get("quality"),
+                                                             info.get("kbps"), force))
     return url
 
 
@@ -1212,6 +1213,10 @@ class Handler(BaseHTTPRequestHandler):
                     purl = free_url(song_id)
                 elif song_id.startswith("tx"):
                     purl = vkeys_play_url(song_id)
+                    if not (purl and probe_any(purl)):
+                        # vkey 有有效期，命中缓存可能已过期 -> 强制刷新一次
+                        log("tx url stale for %s, refreshing" % song_id)
+                        purl = vkeys_play_url(song_id, force=True)
                 elif song_id.startswith("kw"):
                     purl = kuwo_play_url(song_id)
                 else:

@@ -146,3 +146,37 @@ NETEASE_COOKIE=MUSIC_U=.. # 可选：让网易云也能用（含完整 VIP）
 - 这类 CC 源**没有 LRC 歌词** → 音乐页只显示标题/歌手/进度条
 - ccMixter 部分曲目是 **CC BY-NC（非商业）**；Incompetech 是 **CC BY（署名即可）**。设备音乐页会显示作者名作为署名
 - 首次播放需服务端转码（5~20s，取决于曲目长度），之后命中缓存秒开
+
+---
+
+## 8. 播放器又报错的原因与修复（2026-11-10）
+
+日志：
+```
+MusicPlayer: online play: '布拉格广场 - 刘至佳' (id=tx273773223, playable=1)
+MusicApi: lyrics id=tx273773223 -> 85 line(s)
+E NotifyPlayer: Notification HTTP request returned status 404
+MusicPlayer: playback finished (failed)
+```
+
+根因：**腾讯 vkey 播放地址有有效期**。搜索时缓存了 detail（含 url，TTL 600s），
+过几分钟再点播时该 url 已过期 → 服务端探测失败返回 404 → 设备拉流 404 → 播放失败。
+
+修复：`/stream_ogg` 的 tx 分支在探测失败时**强制刷新 detail 再试一次**（`force=True`），
+日志会打印 `tx url stale for tx..., refreshing`。实测 `tx273773223` 现在 200、可播放（VIP 60s）。
+
+## 9. 关于 freemp3music.org（用户提议的站点）——不可用作"无版权"源
+
+技术探测结果：
+```
+GET https://freemp3music.org/                200 (Nuxt SPA，39KB)
+GET /search?q=adele                         301 -> /search/?q=adele -> 404
+GET /api/search?q=adele                     404
+GET /api/v1/search?q=adele / /api/tracks    404
+robots.txt                                  Disallow: /*?q=  /*?term=  /*?query=  (说明搜索是 SPA 动态请求)
+sitemap.xml                                 只有首页/faq/terms 等，无曲目页
+```
+- 站点没有公开 API，搜索完全依赖浏览器执行 JS 后发起的内部请求（需无头浏览器抓包才能拿到）
+- 更关键：它是 **"Free MP3 Download" 聚合站**，内容是有版权的商业音乐，
+  **不属于"无版权限制"**；这类站点普遍不稳定（加验证码/被封/被墙），也有法律风险
+- 结论：不建议作为"固定免费源"；维持 CC 授权源（ccMixter / Incompetech）作为默认
