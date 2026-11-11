@@ -20,6 +20,7 @@
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "notify/notify_player.h"
+#include "music/mp3_stream_player.h"
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
@@ -105,6 +106,9 @@ public:
     /** 真正的启动逻辑（要求状态为 idle） */
     bool StartMusicNow(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics);
 
+    /** MP3 直放（设备端解码）：audio_url 必须是 MP3 直链 */
+    bool StartMusicMp3(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics);
+
     /**
      * Start listening (event-based, thread-safe)
      * Sends MAIN_EVENT_START_LISTENING to be handled in Run()
@@ -150,6 +154,7 @@ private:
     std::string last_error_message_;
     AudioService audio_service_;
     NotifyPlayer notify_player_;
+    Mp3StreamPlayer mp3_player_;
     uint32_t notification_playback_id_ = 0;
 
     /* 非 idle 时被推迟启动的音乐（先中断播报，500ms 后再在主任务启动） */

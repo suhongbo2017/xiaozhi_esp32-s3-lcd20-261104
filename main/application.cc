@@ -22,7 +22,7 @@
 
 #define TAG "Application"
 
-Application::Application() : notify_player_(audio_service_) {
+Application::Application() : notify_player_(audio_service_), mp3_player_(audio_service_) {
     event_group_ = xEventGroupCreate();
 
 #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
@@ -50,6 +50,7 @@ Application::Application() : notify_player_(audio_service_) {
 
 Application::~Application() {
     notify_player_.Stop();
+    mp3_player_.Stop();
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
@@ -1132,6 +1133,7 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
 
 void Application::StopNotification() {
     notify_player_.Stop();
+    mp3_player_.Stop();
     audio_service_.ResetDecoder();
     /* 音乐也跑在同一条引擎上：被唤醒词等外部原因打断时同步收尾 UI */
     MusicPlayer::GetInstance().OnEngineStopped();
@@ -1203,6 +1205,56 @@ bool Application::StartMusic(const std::string& audio_url, const std::vector<Not
     return StartMusicNow(audio_url, lyrics);
 }
 
+bool Application::StartMusicMp3(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics) {
+    (void)lyrics;   /* MP3 直放时歌词由 MusicPlayer 按进度驱动 */
+    if (audio_url.empty()) {
+        return false;
+    }
+    if (GetDeviceState() != kDeviceStateIdle) {
+        ESP_LOGW(TAG, "StartMusicMp3 rejected: state=%d", static_cast<int>(GetDeviceState()));
+        return false;
+    }
+
+    auto& board = Board::GetInstance();
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+    while (audio_service_.PopPacketFromSendQueue()) {
+        /* 丢弃上一轮对话残留的上行音频 */
+    }
+    if (!SetDeviceState(kDeviceStateNotifying)) {
+        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        return false;
+    }
+    audio_service_.ResetDecoder();
+
+    /* 播放期间 ducking，保证唤醒词仍可打断 */
+    if (auto codec = board.GetAudioCodec()) {
+        const int volume = codec->output_volume();
+        const int ducked = volume * CONFIG_MUSIC_DUCK_VOLUME_PERCENT / 100;
+        if (volume > 0 && ducked != volume) {
+            music_saved_volume_ = volume;
+            codec->SetOutputVolume(ducked < 10 ? 10 : ducked);
+            ESP_LOGI(TAG, "Music ducking: volume %d%% -> %d%%", volume, ducked);
+        }
+    }
+
+    uint32_t playback_id = ++notification_playback_id_;
+    if (playback_id == 0) {
+        playback_id = ++notification_playback_id_;
+    }
+    const bool started = mp3_player_.Start(audio_url, playback_id, [](bool ok) {
+        MusicPlayer::GetInstance().OnFinished(0, ok);
+    });
+    if (!started) {
+        ESP_LOGE(TAG, "Failed to start mp3 playback");
+        StopMusic();
+        return false;
+    }
+    ESP_LOGI(TAG, "Music (mp3) playback started, playback_id=%lu", static_cast<unsigned long>(playback_id));
+    return true;
+}
+
 bool Application::StartMusicNow(const std::string& audio_url, const std::vector<NotifySubtitle>& lyrics) {
     if (audio_url.empty()) {
         return false;
@@ -1267,6 +1319,7 @@ bool Application::StartMusicNow(const std::string& audio_url, const std::vector<
 
 void Application::StopMusic() {
     notify_player_.Stop();
+    mp3_player_.Stop();
     notify_player_.SetHttpTimeout(5000);   /* 恢复默认，通知/播报用 */
     if (music_saved_volume_ > 0) {
         if (auto codec = Board::GetInstance().GetAudioCodec()) {

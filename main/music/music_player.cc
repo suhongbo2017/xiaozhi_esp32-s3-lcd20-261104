@@ -243,9 +243,9 @@ bool MusicPlayer::PlayOnlineById(const std::string& song_id) {
         return false;
     }
     auto& api = MusicApiClient::GetInstance();
+
     MusicTrack track;
     track.id = song_id;
-    track.url = api.StreamUrlById(song_id);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& kv : song_cache_) {
@@ -257,20 +257,72 @@ bool MusicPlayer::PlayOnlineById(const std::string& song_id) {
             }
         }
     }
+
+    /* 1) 先问服务端要 MP3 直链（新架构：设备端解码，不做服务端转码） */
+    std::string mp3_url;
+    std::string title, artist;
+    uint32_t duration_ms = 0;
+    const bool have_mp3 = api.PlayInfo(song_id, &mp3_url, &title, &artist, &duration_ms);
+    if (!title.empty()) {
+        track.title = title;
+    }
+    if (!artist.empty()) {
+        track.artist = artist;
+    }
+    if (duration_ms > 0) {
+        track.duration_ms = duration_ms;
+    }
     if (track.title.empty()) {
         track.title = "网络音乐";
     }
+
+    /* 2) 歌词 */
     std::vector<MusicLyricLine> lyrics;
     if (api.GetLyrics(song_id, &lyrics)) {
         track.lyrics = std::move(lyrics);
     }
-    /* 服务端没给时长：用歌词最后一行 + 20s 估个大致值，仅用于进度条 */
     if (track.duration_ms == 0 && !track.lyrics.empty()) {
         track.duration_ms = track.lyrics.back().start_ms + 20000;
     }
-    ESP_LOGI(TAG, "play online id=%s title='%s' lyrics=%u", song_id.c_str(), track.title.c_str(),
-             static_cast<unsigned>(track.lyrics.size()));
-    return PlayTrack(track);
+
+    auto& app = Application::GetInstance();
+    if (app.GetDeviceState() != kDeviceStateIdle) {
+        ESP_LOGI(TAG, "music requested in state %d (will preempt)", static_cast<int>(app.GetDeviceState()));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_ = track;
+        playing_ = true;
+        lyric_index_ = -1;
+    }
+
+    std::vector<NotifySubtitle> subtitles;
+    subtitles.reserve(track.lyrics.size());
+    for (const auto& line : track.lyrics) {
+        subtitles.push_back(NotifySubtitle{line.start_ms, line.text});
+    }
+
+    bool started = false;
+    if (have_mp3 && !mp3_url.empty()) {
+        ESP_LOGI(TAG, "play online (mp3) id=%s '%s' - %s lyrics=%u", song_id.c_str(), track.title.c_str(),
+                 track.artist.c_str(), static_cast<unsigned>(track.lyrics.size()));
+        started = app.StartMusicMp3(mp3_url, subtitles);
+    }
+    if (!started) {
+        /* 兜底：服务端 OGG/Opus 转码链路（旧路径） */
+        ESP_LOGW(TAG, "mp3 path unavailable for %s, fallback to stream_ogg", song_id.c_str());
+        started = app.StartMusic(api.StreamUrlById(song_id), subtitles);
+    }
+    if (!started) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        playing_ = false;
+        ESP_LOGE(TAG, "failed to start playback for %s", song_id.c_str());
+        return false;
+    }
+
+    EnsurePage();
+    return true;
 }
 
 bool MusicPlayer::PlayOnline(const std::string& song, const std::string& artist) {

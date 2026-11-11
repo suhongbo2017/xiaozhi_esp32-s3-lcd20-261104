@@ -393,6 +393,27 @@ void AudioService::OpusCodecTask() {
 
             SetDecodeSampleRate(packet->sample_rate, packet->frame_duration);
             bool decoded = false;
+            if (packet->raw_pcm) {
+                /* 设备端 MP3 直放：payload 已经是 int16 PCM，直接进播放队列 */
+                const int16_t* src = reinterpret_cast<const int16_t*>(packet->payload.data());
+                task->pcm.assign(src, src + packet->payload.size() / sizeof(int16_t));
+                if (packet->sample_rate > 0 &&
+                    packet->sample_rate != codec_->output_sample_rate() &&
+                    output_resampler_ != nullptr) {
+                    uint32_t target_size = 0;
+                    esp_ae_rate_cvt_get_max_out_sample_num(output_resampler_, task->pcm.size(), &target_size);
+                    std::vector<int16_t> resampled(target_size);
+                    uint32_t actual = target_size;
+                    {
+                        std::lock_guard<std::mutex> lock(decoder_mutex_);
+                        esp_ae_rate_cvt_process(output_resampler_, (esp_ae_sample_t)task->pcm.data(),
+                                                task->pcm.size(), (esp_ae_sample_t)resampled.data(), &actual);
+                    }
+                    resampled.resize(actual);
+                    task->pcm = std::move(resampled);
+                }
+                decoded = true;
+            }
             if (opus_decoder_ != nullptr) {
                 task->pcm.resize(decoder_frame_size_);
                 esp_audio_dec_in_raw_t raw = {

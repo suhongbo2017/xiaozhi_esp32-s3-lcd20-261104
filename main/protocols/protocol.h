@@ -9,6 +9,8 @@
 
 struct AudioStreamPacket {
     int sample_rate = 0;
+    /* true = payload 是已经解码好的 int16 PCM（设备端 MP3 直放用），跳过 Opus 解码 */
+    bool raw_pcm = false;
     int frame_duration = 0;
     uint32_t timestamp = 0;
     uint32_t playback_id = 0;

@@ -167,6 +167,42 @@ bool MusicApiClient::Search(const std::string& song, const std::string& artist, 
     return !out->empty();
 }
 
+bool MusicApiClient::PlayInfo(const std::string& song_id, std::string* audio_url, std::string* title,
+                              std::string* artist, uint32_t* duration_ms) {
+    std::string body;
+    const int status = HttpGet("/play?id=" + UrlEncode(song_id), &body, 15000);
+    if (status != 200) {
+        ESP_LOGW(TAG, "play info failed: http %d", status);
+        return false;
+    }
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        return false;
+    }
+    bool ok = false;
+    auto url = cJSON_GetObjectItem(root, "audio_url");
+    if (cJSON_IsString(url) && url->valuestring[0] != 0) {
+        if (audio_url) {
+            *audio_url = url->valuestring;
+        }
+        auto t = cJSON_GetObjectItem(root, "title");
+        auto a = cJSON_GetObjectItem(root, "artist");
+        auto d = cJSON_GetObjectItem(root, "duration_ms");
+        if (title && cJSON_IsString(t)) {
+            *title = t->valuestring;
+        }
+        if (artist && cJSON_IsString(a)) {
+            *artist = a->valuestring;
+        }
+        if (duration_ms && cJSON_IsNumber(d)) {
+            *duration_ms = static_cast<uint32_t>(d->valuedouble);
+        }
+        ok = true;
+    }
+    cJSON_Delete(root);
+    return ok;
+}
+
 bool MusicApiClient::GetLyrics(const std::string& song_id, std::vector<MusicLyricLine>* out) {
     if (!out) {
         return false;

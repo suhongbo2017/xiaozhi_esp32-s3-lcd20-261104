@@ -42,6 +42,10 @@ public:
     bool Search(const std::string& song, const std::string& artist, int offset,
                 std::vector<SongItem>* out, std::string* raw_json = nullptr);
 
+    /** 取某首歌的播放信息（/play 接口）：audio_url 是 MP3 直链，供设备端直接解码 */
+    bool PlayInfo(const std::string& song_id, std::string* audio_url, std::string* title,
+                  std::string* artist, uint32_t* duration_ms = nullptr);
+
     /** 取某首歌的歌词（LRC 已由服务端解析成时间轴） */
     bool GetLyrics(const std::string& song_id, std::vector<MusicLyricLine>* out);
 
