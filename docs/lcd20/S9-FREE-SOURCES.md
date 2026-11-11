@@ -84,3 +84,35 @@ GET /stream_ogg?id=lb12 404                    ← MP3 路径被拒后回退旧�
 /play?id=lb0 → http://47.116.199.150:2233/library/Airport_Lounge.mp3
 无鉴权拉流   → 200，2.55MB，63.7 秒 ✓
 ```
+
+---
+
+## 7. 可搜索的免费曲库（2026-11-11）
+
+用户需求："需要可以搜索歌曲的免费曲库"。最终方案 = **三层可搜索曲库**：
+
+| 层 | 内容 | 搜索方式 | 备注 |
+|---|---|---|---|
+| ① 本地曲库 | 23 首 CC BY（Kevin MacLeod），`/opt/xiaozhi-music/library/` | 标题词 + 中文标签（tag 整词匹配） | 最快最稳，`/library/*.mp3` 免鉴权直发 |
+| ② ccMixter | **数万首 CC BY / BY-NC**，在线 API | `search=`/`tags=`/`usernames=` + **分页 offset** | 远端文件需 Referer → 走 `/proxy?id=` 转发 |
+| ③ Incompetech | 23 首 CC BY 目录 | 标签/标题 | 本地库未命中时的兜底 |
+
+### 关键实现
+- **`/proxy?id=<cc|ik>`**：服务端带 `Referer` 转发远端 MP3（ccMixter 直接拉会 403），
+  设备 `Mp3StreamPlayer` 无需任何 header 即可边下边播
+- **分页**：`/search?...&offset=N&limit=5` → `has_more` 正确
+- **`tags=` 模式**：中文风格词（钢琴/爵士/放松/欢快/电子/民谣…）→ 英文 tag
+- **反向映射**：英文 `piano` → 中文标签 `钢琴`（本地库也能命中）
+- **排序优先级**：本地曲库(−3000) > 已转码缓存(−1000) > Incompetech(−200) > 其它
+- 匹配用**词边界**，避免 `rock` 命中 `Rocket Power`
+
+### 实测
+```
+搜 钢琴 → lb4 Fig Leaf Rag | lb8 Gymnopedie No 1 | ik1 Carefree
+搜 piano → lb4 | lb8 | ik10 Bossa Antigua
+搜 jazz  → lb0 Airport Lounge | lb1 Bossa Antigua | lb7 George Street Shuffle
+搜 放松  → lb0 | lb1 | cc71335 SQUARE PEGS in CIRCLES
+搜 jazz&offset=3 → cc71259 Citybuilder / cc71255 Electra Glider / cc71238 Remote Control Soul（分页正确）
+/play?id=cc71324 → http://47.116.199.150:2233/proxy?id=cc71324
+拉 /proxy?id=cc71324 → 200，1.99MB，287.4 秒 ✓
+```

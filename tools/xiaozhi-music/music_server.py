@@ -1063,11 +1063,24 @@ def lib_search(song, artist="", limit=10):
         return out[:limit]
     ql = q.lower()
     qtags = [t.strip() for t in _cc_translate(q).replace(",", " ").split() if t.strip()]
-    matched = []
-    for it in items:
-        hay = (it["name"] + " " + it.get("tags", "")).lower()
-        if ql in hay or any(t in hay for t in qtags):
-            matched.append(it)
+    # 反向映射：英文风格词 -> 中文标签（piano -> 钢琴 ...）
+    for zh, en in CC_ZH_MAP:
+        if en == ql and zh not in qtags:
+            qtags.append(zh)
+
+    def hit(it):
+        name = (it["name"] or "").lower()
+        tag_list = [t for t in (it.get("tags") or "").replace(",", " ").split() if t]
+        # 标签整词匹配
+        if ql in tag_list or any(t in tag_list for t in qtags):
+            return True
+        # 标题按词边界匹配（rock 不再命中 Rocket Power）
+        words = re.split(r"[^0-9a-z一-鿿]+", name)
+        if ql in words:
+            return True
+        return len(ql) >= 3 and ql in name
+
+    matched = [it for it in items if hit(it)]
     return matched[:limit]
 
 
@@ -1124,14 +1137,23 @@ def _is_genre_query(song):
     return _cc_translate(q) != q
 
 
-def free_search(song, artist="", limit=10):
-    """ccMixter 搜索；无结果时用 Incompetech 精选目录兜底"""
+def free_search(song, artist="", limit=10, offset=0):
+    """ccMixter 搜索（支持分页/标签/歌手）；无结果时用 Incompetech 精选目录兜底"""
     kw = _cc_translate((song or "").strip())
-    key = "cc:" + kw.lower() + "|" + artist.strip().lower()
+    key = "cc:" + kw.lower() + "|" + artist.strip().lower() + "|%d|%d" % (limit, offset)
     hit = _CC_CACHE.get(key)
     if hit and time.time() - hit[0] < _CC_TTL:
         return hit[1]
-    url = CC_API % (max(limit, 6), urllib.parse.quote(kw))
+    qparts = ["f=json", "limit=%d" % max(limit, 6)]
+    if offset:
+        qparts.append("offset=%d" % offset)
+    if _is_genre_query(song) and kw:
+        qparts.append("tags=%s" % urllib.parse.quote(kw))       # 风格词按标签搜更准
+    else:
+        qparts.append("search=%s" % urllib.parse.quote(kw))
+    if artist:
+        qparts.append("usernames=%s" % urllib.parse.quote(artist))
+    url = "https://ccmixter.org/api/query?" + "&".join(qparts)
     raw = _http_get_text_utf8(url)
     out = []
     if raw:
@@ -1313,12 +1335,16 @@ def free_meta(song_id):
     return {}
 
 
-def free_candidates(song, artist="", limit=6):
-    """CC 候选：本地曲库 + ccMixter + Incompetech 目录"""
-    items = list(lib_search(song, artist, limit))
-    if items:
+def free_candidates(song, artist="", limit=6, offset=0):
+    """CC 候选：本地曲库 + ccMixter（分页）+ Incompetech 目录"""
+    items = []
+    if offset == 0:
+        items = list(lib_search(song, artist, limit))
+    for c in free_search(song, artist, limit, offset):
+        if all(c["id"] != i["id"] for i in items):
+            items.append(c)
+    if items and _is_genre_query(song):
         return items[:max(limit, 6)]
-    items = list(free_search(song, artist, limit))
     if items or not _is_genre_query(song):
         return items[:max(limit, 6)]   # 具体歌名：只返回真实匹配（可能为空 -> 上层回退腾讯）
     try:
@@ -1348,7 +1374,9 @@ def free_pick(items, song, artist):
     def rank(c):
         name = norm(c["name"])
         r = 0
-        if cached(c):
+        if str(c.get("id", "")).startswith("lb"):
+            r -= 3000          # 本地曲库：最稳最快，最高优先
+        elif cached(c):
             r -= 1000          # 已转码：优先，秒开
         elif str(c.get("id", "")).startswith("ik"):
             r -= 200           # 未缓存时优先 Incompetech（CDN 更快，转码更快）
@@ -1427,6 +1455,65 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
+
+        # ---- /proxy?id=<ccN|ikN|lbN>：带 Referer 转发远端 MP3（设备播放器加不了 Referer）----
+        if path == "/proxy":
+            sid = (params.get("id") or [""])[0]
+            if not sid:
+                self._send_json(400, {"error": "missing id"})
+                return
+            if sid.startswith("lb"):
+                rel = lib_url(sid)
+                if not rel:
+                    self._send_json(404, {"error": "not_found"})
+                    return
+                self.send_response(302)
+                self.send_header("Location", rel)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            remote = free_url(sid)
+            if not remote:
+                self._send_json(404, {"error": "not_found"})
+                return
+            allowed = ("ccmixter.org", "incompetech.com")
+            if not any(h in remote for h in allowed):
+                self._send_json(403, {"error": "host_not_allowed"})
+                return
+            try:
+                if remote.startswith("https://"):
+                    conn = http.client.HTTPSConnection(remote.split("/")[2], timeout=20)
+                else:
+                    conn = http.client.HTTPConnection(remote.split("/")[2], timeout=20)
+                rpath = "/" + "/".join(remote.split("/")[3:])
+                conn.request("GET", rpath, headers={
+                    "User-Agent": NETEASE_UA,
+                    "Referer": _referer_for(remote),
+                    "Accept": "*/*",
+                })
+                resp = conn.getresponse()
+                if resp.status not in (200, 206):
+                    self._send_json(502, {"error": "upstream_%d" % resp.status})
+                    conn.close()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", resp.getheader("Content-Type") or "audio/mpeg")
+                clen = resp.getheader("Content-Length")
+                if clen:
+                    self.send_header("Content-Length", clen)
+                self.end_headers()
+                sent = 0
+                while True:
+                    chunk = resp.read(32 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+                conn.close()
+                log("proxy %s -> %d bytes" % (sid, sent))
+            except Exception as e:
+                log("proxy failed %s: %r" % (sid, e))
+            return
 
         # 本地 CC 曲库：音频文件免鉴权（设备 MP3 播放器不带 header）
         if path.startswith("/library/"):
@@ -1616,7 +1703,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # 只使用无版权限制的免费源（ccMixter / Incompetech）
             # song 为空时 = "随便放首歌"，走内置 CC 曲库（随机）
-            ordered = free_pick(free_candidates(song, artist, max(limit + 3, 6)), song, artist)
+            ordered = free_pick(free_candidates(song, artist, max(limit + 3, 6), offset), song, artist)
             # 其次酷我（官方版本命中率高），最后退回网易云
             if not ordered:
                 self._send_json(404, {"error": "song not found",
@@ -1715,13 +1802,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": "not_found"})
                 return
             meta = free_meta(song_id)
+            host = self.headers.get("Host") or ("47.116.199.150:%d" % PORT)
             self._send_json(200, {
                 "id": song_id,
                 "title": meta.get("name", ""),
                 "artist": meta.get("artist", ""),
                 "album": meta.get("album", ""),
                 "duration_ms": meta.get("duration", 0),
-                "audio_url": purl,
+                # 远端 CC 文件需要 Referer，统一走本机 /proxy 转发
+                "audio_url": "http://%s/proxy?id=%s" % (host, urllib.parse.quote(song_id)),
                 "license": meta.get("album", ""),
             })
             return
