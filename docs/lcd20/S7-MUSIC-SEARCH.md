@@ -100,3 +100,49 @@ id 加前缀 `tx`（如 `tx102065756`），设备端零改动。
 4. VIP 歌不再直接报错，而是**播 60s 试听**并在响应头标记 `X-Trial-Clip: 1`、日志告警
 5. 时长校验（ffprobe）保留：防止把 11s/60s 片段当完整歌曲缓存
 6. 仍支持 `NETEASE_COOKIE` 环境变量：哪天想完整播 VIP 歌，配上即可（优先走网易云完整源）
+
+---
+
+## 7. 最终定稿：默认使用"无版权限制"的免费源
+
+用户要求"无版权限制的免费源"，实测后选择：
+
+| 源 | 授权 | 能力 | 状态 |
+|---|---|---|---|
+| **ccMixter** (`ccmixter.org/api/query`) | CC BY / CC BY-NC | 关键词搜索 + MP3 直链（需 `Referer`，否则 403） | ✅ 主用 |
+| **Incompetech**（Kevin MacLeod） | CC BY 4.0 | 12 首精选曲目直链，作"风格类查询"兜底 | ✅ 兜底 |
+| 腾讯音乐(vkeys) | 版权受限 | 搜索准，VIP 仅 60s | 仅在特定歌名时回退 |
+| 酷我 / 网易云 | 版权受限 | 11s / 需登录 | 末位兜底 |
+
+### 关键词映射（两个源元数据都是英文）
+```
+钢琴→piano  吉他→guitar  爵士→jazz  轻音乐/纯音乐→instrumental
+放松/舒缓→chill  氛围→ambient  欢快→upbeat  电影→music_for_film  ...
+```
+
+### 行为规则（重要）
+- **风格/情绪类查询**（钢琴、jazz、轻音乐、宽松、空查询…）→ 免费源（ccMixter → Incompetech 目录）
+- **具体歌名**（如"七里香"）→ 免费源没有就**回退腾讯**（官方原唱，VIP 仅 60s 试听，`playable=false` 明确标记）
+  → 避免出现"点七里香却播放了无关的钢琴曲"
+
+### 实测
+| 请求 | 结果 |
+|---|---|
+| 搜"钢琴" | `ik0 Monkeys Spinning Monkeys - Kevin MacLeod / CC BY 4.0 / playable=true` |
+| 搜"jazz" | `cc71324 Jazz Backing Track - JeffSpeed68 / Attribution Noncommercial` |
+| 搜"轻音乐" | ccMixter 命中 |
+| 搜"七里香" | 回退腾讯：`tx102065756 七里香 - 周杰伦（playable=false，VIP 试听）` |
+| 播放 cc71324 | 200，OGG **287.4s** 完整 |
+| 播放 ik0 | 200，OGG **125.1s** 完整 |
+
+### 环境变量
+```
+MUSIC_PROVIDER=free      # 默认：免费源优先
+MUSIC_PROVIDER=tencent   # 强制腾讯源
+NETEASE_COOKIE=MUSIC_U=.. # 可选：让网易云也能用（含完整 VIP）
+```
+
+### 已知取舍
+- 这类 CC 源**没有 LRC 歌词** → 音乐页只显示标题/歌手/进度条
+- ccMixter 部分曲目是 **CC BY-NC（非商业）**；Incompetech 是 **CC BY（署名即可）**。设备音乐页会显示作者名作为署名
+- 首次播放需服务端转码（5~20s，取决于曲目长度），之后命中缓存秒开
