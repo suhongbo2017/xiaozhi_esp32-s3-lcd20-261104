@@ -356,7 +356,7 @@ def build_ogg(song_id, audio_url, expected_ms=0):
         elif "kuwo" in audio_url:
             referer = "https://www.kuwo.cn/"
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-rw_timeout", "30000000",
             "-headers",
             "Referer: %s\r\nUser-Agent: %s\r\n" % (referer, NETEASE_UA),
             "-i", audio_url,
@@ -364,7 +364,7 @@ def build_ogg(song_id, audio_url, expected_ms=0):
             "-c:a", "libopus", "-b:a", "32k", "-application", "audio",
             "-f", "ogg", tmp,
         ]
-        r = subprocess.run(cmd, capture_output=True, timeout=180)
+        r = subprocess.run(cmd, capture_output=True, timeout=300)
         if r.returncode != 0 or not os.path.exists(tmp) or os.path.getsize(tmp) < 1024:
             sys.stderr.write(
                 "[music] ffmpeg failed: %s\n" % r.stderr.decode("utf-8", "replace")[:400]
@@ -746,18 +746,33 @@ _VKEYS_CACHE = {}
 _VKEYS_TTL = 30 * 60
 
 
-def _http_get_text_utf8(url, timeout=15, retries=3):
+def _http_get_text_utf8(url, timeout=15, retries=4):
     """vkeys 返回 UTF-8 JSON；该 API 偶发 503，带重试"""
     for attempt in range(retries):
         body = _http_get_text_utf8_once(url, timeout)
         if body:
             return body
         if attempt < retries - 1:
-            time.sleep(0.4 * (attempt + 1))
+            time.sleep(1.0 * (attempt + 1))
     return ""
 
 
+_VKEYS_LOCK = threading.Lock()
+_VKEYS_LAST = [0.0]
+
+
+def _vkeys_throttle():
+    """vkeys 公共 API 有速率限制：全局串行，两次调用至少间隔 1.1 秒"""
+    with _VKEYS_LOCK:
+        gap = 1.1 - (time.time() - _VKEYS_LAST[0])
+        if gap > 0:
+            time.sleep(gap)
+        _VKEYS_LAST[0] = time.time()
+
+
 def _http_get_text_utf8_once(url, timeout=15):
+    if "api.vkeys.cn" in url:
+        _vkeys_throttle()
     try:
         host = url.split("/")[2]
         path = "/" + "/".join(url.split("/")[3:])
@@ -986,6 +1001,18 @@ def _parse_ps(text):
     return 0
 
 
+def _is_genre_query(song):
+    """风格/情绪/空查询 -> True；具体歌名 -> False"""
+    q = (song or "").strip().lower()
+    if not q:
+        return True
+    genre_words = {en for _zh, en in CC_ZH_MAP} | {"music", "song", "bgm", "lofi", "piano", "jazz",
+                                                   "rock", "chill", "ambient", "pop", "folk", "relax"}
+    if q in genre_words:
+        return True
+    return _cc_translate(q) != q
+
+
 def free_search(song, artist="", limit=10):
     """ccMixter 搜索；无结果时用 Incompetech 精选目录兜底"""
     kw = _cc_translate((song or "").strip())
@@ -1022,16 +1049,21 @@ def free_search(song, artist="", limit=10):
                 "score": 0,
                 "_url": "https://ccmixter.org/%s/%s" % (rel, mp3["file_name"]),
             })
+    # 具体歌名：ccMixter 的关键词匹配会把"make my life"这类词命中无关曲目，
+    # 必须过滤成"标题包含查询词"，否则宁可返回空，让上层回退腾讯原曲。
+    if out and not _is_genre_query(song):
+        needle = (song or "").strip().lower()
+        out = [c for c in out if needle and needle in (c.get("name") or "").lower()]
+        if not out:
+            log("ccmixter results do not match %r (title filter) -> fall back" % (song,))
+            return []
     if out:
         _CC_CACHE[key] = (time.time(), out)
         log("ccmixter search %r -> %d item(s)" % (kw, len(out)))
         return out
 
     # 判断这是"风格/情绪"类查询还是"具体歌名"
-    genre_words = {en for _zh, en in CC_ZH_MAP} | {"music", "song", "bgm", "lofi", "piano", "jazz",
-                                                   "rock", "chill", "ambient", "pop", "folk"}
-    q0 = (song or "").strip().lower()
-    is_genre = (not q0) or (kw.strip().lower() in genre_words) or (_cc_translate(q0) != q0)
+    is_genre = _is_genre_query(song)
     if not is_genre:
         log("ccmixter has no match for %r (specific song) -> let upper layer fall back" % (song,))
         return []
@@ -1148,8 +1180,10 @@ def free_meta(song_id):
 
 
 def free_candidates(song, artist="", limit=6):
-    """CC 候选：ccMixter 命中 + Incompetech 目录（后者兜底，保证有可播项）"""
+    """CC 候选：ccMixter 命中 + Incompetech 目录（目录兜底仅用于风格类查询）"""
     items = list(free_search(song, artist, limit))
+    if items or not _is_genre_query(song):
+        return items[:max(limit, 6)]   # 具体歌名：只返回真实匹配（可能为空 -> 上层回退腾讯）
     try:
         catalog = free_search("", "", 6)   # 空查询 -> 目录随机
     except Exception:
@@ -1294,11 +1328,16 @@ class Handler(BaseHTTPRequestHandler):
                             if title_for_fallback:
                                 break
                         if title_for_fallback:
-                            log("tx resolution failed, fallback by title %r" % title_for_fallback)
-                            fb = free_pick(free_search(title_for_fallback, "", 3), title_for_fallback, "")
-                            if fb:
-                                song_id = fb[0]["id"]
-                                purl = free_url(song_id)
+                            log("tx resolution failed, retry by title %r" % title_for_fallback)
+                            for alt in vkeys_search(title_for_fallback, "", 6):
+                                alt_id = alt.get("id", "")
+                                if not alt_id.startswith("tx") or alt_id == song_id:
+                                    continue
+                                alt_url = vkeys_play_url(alt_id, force=True)
+                                if alt_url and probe_any(alt_url):
+                                    song_id, purl = alt_id, alt_url
+                                    log("fallback to %s for %r" % (alt_id, title_for_fallback))
+                                    break
                 elif song_id.startswith("kw"):
                     purl = kuwo_play_url(song_id)
                 else:
@@ -1558,19 +1597,25 @@ class Handler(BaseHTTPRequestHandler):
                 if cid.startswith(("cc", "ik")):
                     return True   # CC 授权，直接可完整播放（实际拉流时还会校验）
                 if cid.startswith("tx"):
-                    # vkeys 偶发 503；detail 拿不到时乐观标记可播，播放时再严格校验
+                    # 必须真的拿到 url 才算可播（有的 id 在 vkeys 里就是没有详情）
                     try:
-                        return bool(vkeys_play_url(cid)) or True
+                        return bool(vkeys_play_url(cid))
                     except Exception:
-                        return True
+                        return False
                 if c.get("provider") == "kuwo" or cid.startswith("kw"):
                     return kuwo_is_playable(cid)
                 return is_playable(cid)
 
-            with ThreadPoolExecutor(max_workers=min(len(page), 5)) as ex:
-                playable_map = dict(zip(
-                    [str(c["id"]) for c in page],
-                    list(ex.map(_playable, page))))
+            # vkeys 限流：串行探测前 3 个，其余默认按可播处理（播放时会再校验）
+            playable_map = {}
+            probed = 0
+            for c in page:
+                cid = str(c.get("id", ""))
+                if probed < 3:
+                    playable_map[cid] = _playable(c)
+                    probed += 1
+                else:
+                    playable_map[cid] = True
             items = []
             for i, c in enumerate(page):
                 cid = str(c["id"])
@@ -1591,13 +1636,11 @@ class Handler(BaseHTTPRequestHandler):
                     "trial": trial,           # true = 只有 60 秒试听（VIP），仍可播放
                 })
             # 预热：后台转码前两个可播放候选（点播时即可秒开；CC 下载慢，尤其需要）
-            started = 0
+            # 只预热一首：并发预热会争抢带宽导致双方都超时
             for it in items:
                 if it.get("playable"):
                     threading.Thread(target=_prewarm_ogg, args=(it["id"],), daemon=True).start()
-                    started += 1
-                    if started >= 2:
-                        break
+                    break
             print(f"[music] search song={song!r} artist={artist!r} offset={offset} "
                   f"total={len(ordered)} items={len(items)}", flush=True)
             self._send_json(200, {

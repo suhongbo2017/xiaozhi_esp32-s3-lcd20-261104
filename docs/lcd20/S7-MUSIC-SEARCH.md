@@ -242,3 +242,36 @@ sitemap.xml                                 只有首页/faq/terms 等，无曲�
   现在设备会**直接播 60 秒试听**，不再报"版权受限"。
 - **想完整听**：只有两条路 —— ① 自己的会员账号 cookie（网易云 `MUSIC_U`）② 盗版站（不稳定/有法律风险，不建议）。
 - **想随便听音乐**：CC 授权源（ccMixter / Incompetech）可以**完整播放**，说"放点钢琴曲/来点爵士/随便放首歌"即可。
+
+---
+
+## 13. "还是出错"的 3 个真凶（用服务器日志定位，2026-11-11）
+
+### ① ccMixter 关键词搜索污染 → "出来的都不是原曲"
+搜 `Make My Life` / `Crazy` 时，ccMixter 会命中歌词里含这些词的无关 CC 曲目，设备就播了无关曲目。
+**修复**：具体歌名必须"标题包含查询词"才采用，否则返回空并回退腾讯原曲。
+```
+Make My Life → tx734141040 Make My Life - Michael Robertazzi（原曲）
+Crazy        → tx511331370 CRAZY - LE SSERAFIM（原曲，playable=True）
+```
+
+### ② vkeys 公共 API 限流 → 播放地址取不到（404 / playable 误判）
+连续调用 detail 第二次就 `{"code":503,"message":"系统运行错误"}`。
+**修复**：
+- 全局限速：两次 vkeys 调用至少间隔 **1.1s**（串行锁）
+- 重试 **4 次**、退避 1/2/3s
+- `/search` 只探测前 3 个候选，其余默认按可播处理
+- detail 缓存 30 分钟；播放时最多 3 次强制刷新
+- 取不到时用曲名重新搜索，选另一首有 url 的版本
+
+### ③ ccMixter 下载慢 → ffmpeg 180s 超时 → 503
+日志：`transcode error: ffmpeg ... timed out after 180 seconds`（cc71338 / cc71339 并发预热，互抢带宽）。
+**修复**：转码超时 300s、加 `-rw_timeout 30s` 快速失败、**只预热一首**、已缓存优先、未缓存时优先 Incompetech（CDN 更快）。
+
+### 实测（修复后）
+| 请求 | 结果 |
+|---|---|
+| 搜 Crazy | `tx511331370 playable=True trial=True`（6.1s） |
+| 搜 七里香 | `tx102065756 playable=True`（6.5s） |
+| 播 tx511331370 / tx102065756 | 200，OGG 60.0s，**0.2s 返回（缓存命中）** |
+| 搜/播 钢琴 · jazz | 200，OGG 205~287s 完整 CC 曲 |
