@@ -1019,18 +1019,32 @@ _IK_TAGS = {
 }
 
 
+LIB_JSON = os.path.join(LIB_DIR, "library.json")
+_ACQUIRING = set()
+
+
+def _lib_meta_from_json():
+    """读取 library.json: {"tracks":[{file,title,artist,tags,license,source_id}]}"""
+    try:
+        with open(LIB_JSON, encoding="utf-8") as fh:
+            data = json.load(fh)
+        out = {}
+        for t in (data.get("tracks") or []):
+            fn = t.get("file")
+            if fn:
+                out[fn] = t
+        return out
+    except Exception:
+        return {}
+
+
 
 # ============================================================
 # Jamendo（可选，需要免费 client_id：https://devportal.jamendo.com）
-# 60 万+ CC 授权曲目，含大量有人声的"歌曲"；设置 JAMENDO_CLIENT_ID 后自动启用
 # ============================================================
 JAMENDO_CID = os.environ.get("JAMENDO_CLIENT_ID", "").strip()
 _JAM_CACHE = {}
 _JAM_TTL = 30 * 60
-
-
-def jamendo_enabled():
-    return bool(JAMENDO_CID)
 
 
 def jamendo_search(song, artist="", limit=10, offset=0):
@@ -1055,8 +1069,7 @@ def jamendo_search(song, artist="", limit=10, offset=0):
     out = []
     if raw:
         try:
-            d = json.loads(raw)
-            for t in (d.get("results") or []):
+            for t in (json.loads(raw).get("results") or []):
                 audio = t.get("audio") or ""
                 if not audio:
                     continue
@@ -1064,11 +1077,9 @@ def jamendo_search(song, artist="", limit=10, offset=0):
                     "id": "jm%s" % t.get("id"),
                     "name": _clean(t.get("name")),
                     "artist": _clean(t.get("artist_name")),
-                    "album": "Jamendo / %s" % _clean(t.get("license_ccurl") or "CC"),
+                    "album": "Jamendo / CC",
                     "duration": int(t.get("duration") or 0) * 1000,
-                    "provider": "jamendo",
-                    "score": 0,
-                    "_url": audio,
+                    "provider": "jamendo", "score": 0, "_url": audio,
                 })
         except Exception as e:
             log("jamendo parse failed: %r" % (e,))
@@ -1100,16 +1111,18 @@ def lib_refresh(force=False):
         names = sorted(f for f in os.listdir(LIB_DIR) if f.lower().endswith(".mp3"))
     except Exception:
         names = []
+    meta_json = _lib_meta_from_json()
     for i, fn in enumerate(names):
         base = os.path.splitext(fn)[0]
-        title = base.replace("_", " ")
-        tags = _IK_TAGS.get(base, "")
+        meta = meta_json.get(fn) or {}
+        title = meta.get("title") or base.replace("_", " ")
+        tags = meta.get("tags") or _IK_TAGS.get(base, "")
         items.append({
             "id": "lb%d" % i,
             "name": title,
-            "artist": "Kevin MacLeod",
-            "album": "CC BY 4.0",
-            "duration": 0,
+            "artist": meta.get("artist") or "Kevin MacLeod",
+            "album": meta.get("license") or "CC",
+            "duration": int(meta.get("duration_ms") or 0),
             "provider": "library",
             "score": 0,
             "tags": tags,
@@ -1153,6 +1166,65 @@ def lib_search(song, artist="", limit=10):
 
     matched = [it for it in items if hit(it)]
     return matched[:limit]
+
+
+def acquire_to_library(sid, remote_url, title="", artist="", tags="", license_name="CC"):
+    """把远端 MP3 下载到本地曲库（后台线程），下次播放直接走 /library"""
+    sid = str(sid)
+    if not remote_url or sid in _ACQUIRING:
+        return
+    _ACQUIRING.add(sid)
+
+    def job():
+        try:
+            fname = "lib_%s.mp3" % sid.replace("/", "_")
+            target = os.path.join(LIB_DIR, fname)
+            if os.path.exists(target) and os.path.getsize(target) > 1024:
+                return
+            tmp = target + ".part"
+            if remote_url.startswith("https://"):
+                conn = http.client.HTTPSConnection(remote_url.split("/")[2], timeout=30)
+            else:
+                conn = http.client.HTTPConnection(remote_url.split("/")[2], timeout=30)
+            rpath = "/" + "/".join(remote_url.split("/")[3:])
+            conn.request("GET", rpath, headers={
+                "User-Agent": NETEASE_UA,
+                "Referer": _referer_for(remote_url),
+            })
+            resp = conn.getresponse()
+            if resp.status not in (200, 206):
+                log("acquire %s failed: http %d" % (sid, resp.status))
+                conn.close()
+                return
+            total = 0
+            with open(tmp, "wb") as fh:
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    total += len(chunk)
+            conn.close()
+            os.replace(tmp, target)
+            # 写元数据
+            meta = _lib_meta_from_json()
+            meta[fname] = {
+                "file": fname,
+                "title": title or sid,
+                "artist": artist or "CC Music",
+                "tags": tags or "",
+                "license": license_name or "CC",
+                "source_id": sid,
+            }
+            with open(LIB_JSON, "w", encoding="utf-8") as fh:
+                json.dump({"tracks": list(meta.values())}, fh, ensure_ascii=False, indent=1)
+            log("acquired %s -> %s (%.1f MB)" % (sid, fname, total / 1048576.0))
+        except Exception as e:
+            log("acquire error %s: %r" % (sid, e))
+        finally:
+            _ACQUIRING.discard(sid)
+
+    threading.Thread(target=job, daemon=True).start()
 
 
 def lib_url(song_id):
@@ -1875,11 +1947,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": "not_found"})
                     return
                 host = self.headers.get("Host") or ("47.116.199.150:%d" % PORT)
-                self._send_json(200, {
-                    "id": song_id,
-                    "audio_url": "http://%s/proxy?id=%s" % (host, urllib.parse.quote(song_id)),
-                    "license": "Jamendo / CC",
-                })
+                self._send_json(200, {"id": song_id, "license": "Jamendo / CC",
+                                      "audio_url": "http://%s/proxy?id=%s" % (host, urllib.parse.quote(song_id))})
                 return
             if not song_id.startswith(("cc", "ik")):
                 self._send_json(400, {"error": "only_free_sources",

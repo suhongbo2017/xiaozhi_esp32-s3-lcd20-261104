@@ -145,3 +145,30 @@ GET /stream_ogg?id=lb12 404                    ← MP3 路径被拒后回退旧�
 | 器乐/纯音乐 | 本地库 23 首 + Incompetech + ccMixter | 63~287s 完整 ✓ |
 | **带人声歌曲** | ccMixter `vocals`（+ Jamendo 待配置） | 315.6s 完整 ✓ |
 | 流行商业歌 | —— | 无（版权源已删） |
+
+---
+
+## 9. 架构调整：先下载到服务器，再发给设备（不依赖 API 网站）（2026-11-16）
+
+按用户要求改为"**采集到本地 → 本地直发**"，不再要求外部站点提供 API：
+
+### 三种入库方式
+
+| 方式 | 用法 | 说明 |
+|---|---|---|
+| ① 播放时自动落盘 | 设备点播 `cc*/ik*` → 服务端返回 `/proxy` **立即播放**，同时后台线程把它下载进 `library/` + 写 `library.json` | 第二次播放就走 `/library`（本地直发，最快、无外网依赖） |
+| ② 批量收割 | `python3 /opt/xiaozhi-music/harvest.py [tags...]` | 默认抓 vocals/acappella/jazz/piano/chill/rock/electronic/folk/soundtrack/hiphop/classical/ambient，每标签 12 首 |
+| ③ 手动添加任意 URL | `/opt/xiaozhi-music/add_track.sh <url> "标题" "作者" "标签" ["CC BY"]` | **任何**免费 MP3 直链都能入库，不需要 API |
+
+### 关键实现
+- `library.json`：`{tracks:[{file,title,artist,tags,license,source_id}]}`，`lib_refresh()` 读它做元数据
+- `acquire_to_library()`：后台下载（带 Referer/UA），写 `.part` → rename，成功才写元数据
+- `/library/<file>`：免鉴权、直发 MP3（设备 minimp3 解码）
+- 搜索优先级：本地库（lb*）> Jamendo(jm*) > ccMixter(cc*) > Incompetech(ik*)
+
+### 实测
+```
+搜「歌曲」→ lb23 No Meaning No (society) / lb24 Ip Op - ashwan / lb25 Wired Loop Example - wired  ← 本地库人声曲
+搜「钢琴」→ lb4 Fig Leaf Rag / lb8 Gymnopedie No 1
+曲库文件数：26（harvest 持续增长，55MB）
+```
