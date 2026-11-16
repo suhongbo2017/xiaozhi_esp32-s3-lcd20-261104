@@ -941,6 +941,7 @@ _CC_TTL = 30 * 60
 
 # 中文关键词 -> 英文标签（两个源的元数据都是英文）
 CC_ZH_MAP = [
+    ("歌曲", "vocals"), ("唱歌", "vocals"), ("人声", "vocals"), ("有词的", "vocals"),
     ("钢琴", "piano"), ("吉他", "guitar"), ("小提琴", "violin"), ("萨克斯", "saxophone"),
     ("爵士", "jazz"), ("摇滚", "rock"), ("电子", "electronic"), ("嘻哈", "hiphop"),
     ("说唱", "rap"), ("鼓", "drums"), ("贝斯", "bass"),
@@ -1016,6 +1017,76 @@ _IK_TAGS = {
     "Spazzmatica_Polka": "幽默 快节奏 波尔卡",
     "Wagon_Wheel": "民谣 乡村 轻松",
 }
+
+
+
+# ============================================================
+# Jamendo（可选，需要免费 client_id：https://devportal.jamendo.com）
+# 60 万+ CC 授权曲目，含大量有人声的"歌曲"；设置 JAMENDO_CLIENT_ID 后自动启用
+# ============================================================
+JAMENDO_CID = os.environ.get("JAMENDO_CLIENT_ID", "").strip()
+_JAM_CACHE = {}
+_JAM_TTL = 30 * 60
+
+
+def jamendo_enabled():
+    return bool(JAMENDO_CID)
+
+
+def jamendo_search(song, artist="", limit=10, offset=0):
+    if not JAMENDO_CID:
+        return []
+    key = "jm:%s|%s|%d|%d" % ((song or "").lower(), artist.lower(), limit, offset)
+    hit = _JAM_CACHE.get(key)
+    if hit and time.time() - hit[0] < _JAM_TTL:
+        return hit[1]
+    q = ["client_id=" + JAMENDO_CID, "format=json", "limit=%d" % max(limit, 6),
+         "audioformat=mp32", "include=musicinfo", "order=popularity_total"]
+    if offset:
+        q.append("offset=%d" % offset)
+    kw = _cc_translate((song or "").strip())
+    if _is_genre_query(song) and kw:
+        q.append("tag=" + urllib.parse.quote(kw))
+    elif kw:
+        q.append("search=" + urllib.parse.quote(kw))
+    if artist:
+        q.append("artist_name=" + urllib.parse.quote(artist))
+    raw = _http_get_text_utf8("https://api.jamendo.com/v3.0/tracks/?" + "&".join(q))
+    out = []
+    if raw:
+        try:
+            d = json.loads(raw)
+            for t in (d.get("results") or []):
+                audio = t.get("audio") or ""
+                if not audio:
+                    continue
+                out.append({
+                    "id": "jm%s" % t.get("id"),
+                    "name": _clean(t.get("name")),
+                    "artist": _clean(t.get("artist_name")),
+                    "album": "Jamendo / %s" % _clean(t.get("license_ccurl") or "CC"),
+                    "duration": int(t.get("duration") or 0) * 1000,
+                    "provider": "jamendo",
+                    "score": 0,
+                    "_url": audio,
+                })
+        except Exception as e:
+            log("jamendo parse failed: %r" % (e,))
+    if out:
+        _JAM_CACHE[key] = (time.time(), out)
+        log("jamendo search %r -> %d item(s)" % (kw, len(out)))
+    return out
+
+
+def jamendo_url(song_id):
+    sid = str(song_id)
+    if not sid.startswith("jm"):
+        return ""
+    for (_k, (_t, items)) in _JAM_CACHE.items():
+        for it in items:
+            if it["id"] == sid:
+                return it.get("_url") or ""
+    return ""
 
 
 def lib_refresh(force=False):
@@ -1130,8 +1201,9 @@ def _is_genre_query(song):
     q = (song or "").strip().lower()
     if not q:
         return True
-    genre_words = {en for _zh, en in CC_ZH_MAP} | {"music", "song", "bgm", "lofi", "piano", "jazz",
-                                                   "rock", "chill", "ambient", "pop", "folk", "relax"}
+    genre_words = {en for _zh, en in CC_ZH_MAP} | {"music", "song", "songs", "bgm", "lofi", "piano",
+                                                   "jazz", "rock", "chill", "ambient", "pop", "folk",
+                                                   "relax", "vocals", "vocal", "acappella"}
     if q in genre_words:
         return True
     return _cc_translate(q) != q
@@ -1340,6 +1412,9 @@ def free_candidates(song, artist="", limit=6, offset=0):
     items = []
     if offset == 0:
         items = list(lib_search(song, artist, limit))
+    for c in jamendo_search(song, artist, limit, offset):
+        if all(c["id"] != i["id"] for i in items):
+            items.append(c)
     for c in free_search(song, artist, limit, offset):
         if all(c["id"] != i["id"] for i in items):
             items.append(c)
@@ -1476,7 +1551,8 @@ class Handler(BaseHTTPRequestHandler):
             if not remote:
                 self._send_json(404, {"error": "not_found"})
                 return
-            allowed = ("ccmixter.org", "incompetech.com")
+            allowed = ("ccmixter.org", "incompetech.com", "jamendo.com", "storage.jamendo.com",
+                       "prod-1.storage.jamendo.com", "mp3l.jamendo.com")
             if not any(h in remote for h in allowed):
                 self._send_json(403, {"error": "host_not_allowed"})
                 return
@@ -1791,6 +1867,18 @@ class Handler(BaseHTTPRequestHandler):
                     "album": meta.get("album", ""),
                     "audio_url": "http://%s%s" % (host, rel),
                     "license": meta.get("album", ""),
+                })
+                return
+            if song_id.startswith("jm"):
+                purl = jamendo_url(song_id)
+                if not purl:
+                    self._send_json(404, {"error": "not_found"})
+                    return
+                host = self.headers.get("Host") or ("47.116.199.150:%d" % PORT)
+                self._send_json(200, {
+                    "id": song_id,
+                    "audio_url": "http://%s/proxy?id=%s" % (host, urllib.parse.quote(song_id)),
+                    "license": "Jamendo / CC",
                 })
                 return
             if not song_id.startswith(("cc", "ik")):

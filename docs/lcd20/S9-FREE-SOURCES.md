@@ -116,3 +116,32 @@ GET /stream_ogg?id=lb12 404                    ← MP3 路径被拒后回退旧�
 /play?id=cc71324 → http://47.116.199.150:2233/proxy?id=cc71324
 拉 /proxy?id=cc71324 → 200，1.99MB，287.4 秒 ✓
 ```
+
+---
+
+## 8. "要能播放的免费歌曲"（带人声曲目）（2026-11-16）
+
+### 已解决：ccMixter 的人声曲目
+中文关键词映射新增：`歌曲 / 唱歌 / 人声 / 有词的 → vocals`，直接命中 ccMixter 的 **a cappella / 人声**曲目。
+
+实测：
+```
+搜「歌曲」→ cc66560 / cc66442 Inner Light - Wiseman / cc66421 Rêves et Perspectives / cc66344 Frozen Lace
+播放 cc66560 → /proxy?id=cc66560 → 200，5.05MB，**315.6 秒完整播放**
+```
+
+### 已就绪：Jamendo（真正的大型免费歌曲库）
+- 需 **免费 client_id**：https://devportal.jamendo.com 注册 → 创建 App → 复制 Client ID
+- 配置：`/etc/systemd/system/xiaozhi-music.service` 增加
+  `Environment=JAMENDO_CLIENT_ID=<你的id>` → `systemctl daemon-reload && systemctl restart xiaozhi-music`
+- 代码已接入（`jamendo_search/jamendo_url` + `/proxy` 白名单 + `/play?id=jm...`）：
+  - 曲库 60 万+，CC 授权，**含大量有人声的歌曲**
+  - 支持 `search=` / `tag=` / `offset` 分页，`order=popularity_total` 按热度
+  - 未配置 key 时自动跳过（不影响现有流程）
+
+### 现状总结（全部可播、全部免费）
+| 类型 | 来源 | 实测 |
+|---|---|---|
+| 器乐/纯音乐 | 本地库 23 首 + Incompetech + ccMixter | 63~287s 完整 ✓ |
+| **带人声歌曲** | ccMixter `vocals`（+ Jamendo 待配置） | 315.6s 完整 ✓ |
+| 流行商业歌 | —— | 无（版权源已删） |

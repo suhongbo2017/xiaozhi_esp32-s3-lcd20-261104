@@ -17,7 +17,9 @@ void RegisterTools(MusicPlayer& player) {
     /* ---- 在线搜索（旧固件语义：song_name / artist_name / offset） ---- */
     mcp.AddTool(
         "self.music.search_song",
-        "搜索在线歌曲。参数 song_name=歌名，artist_name=歌手（可空），offset=分页偏移（默认0）。"
+        "搜索在线歌曲（曲库为 CC 授权的免费音乐，含器乐与人声曲目）。"
+        "参数 song_name=关键词/风格，artist_name=歌手（可空），offset=分页偏移（默认0）。"
+        "风格关键词可用：歌曲/人声（带唱词的曲目）、钢琴、爵士、轻音乐、放松、欢快、氛围、电子、民谣；"
         "返回 JSON：{total, items:[{index,id,name,artist,album,playable,trial}]}。"
         "playable=true 时把 items[].id 传给 self.music.play_song_by_id 播放；"
         "trial=true 表示该版本只有约 60 秒试听（VIP 曲），**仍然可以播放**，"
