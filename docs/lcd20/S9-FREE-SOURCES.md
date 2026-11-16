@@ -199,3 +199,32 @@ GET /stream_ogg?id=lb12 404                    ← MP3 路径被拒后回退旧�
 - 没落盘的曲目不会出现在结果里，助手会提示"曲库准备中/换个风格"
 - `/library` 仍不支持 Range（暂无 seek/续传）
 - 曲库规模决定覆盖率：持续跑 harvest.py 即可（磁盘按 3.5MB/首 估算）
+
+---
+
+## 11. 改为"服务器只暂存"（用户要求，2026-11-16）
+
+### 澄清一个数字
+"55 秒"是**整首下载时间**，不是起播时间。ccMixter 远端曲目经 `/proxy` **流式转发**实测：
+
+| 指标 | 实测 |
+|---|---|
+| **起播（首字节）** | **0.9 ~ 2.5 秒** |
+| 整首 4.3MB 传完 | ~52 秒（源站 82KB/s） |
+| 是否够播 | 够：128kbps 音频只需 16KB/s，源站 82KB/s > 需求，**边下边播不中断** |
+
+### 改动
+1. **停止批量收割**（`harvest.py` 进程已 kill，不再往服务器囤歌）
+2. `library/` 从此是**临时缓存**，不是曲库：
+   - `CACHE_TTL_HOURS`（默认 **2 小时**）：超过就删
+   - `CACHE_MAX_MB`（默认 **300MB**）：超容量按最旧优先删
+   - 后台 `cache_maintain()` 每 5 分钟清理一次，日志 `cache expire/evict`
+3. `/search` 恢复完整 ccMixter（远端曲可直接点，起播 ~1-2s）
+4. `add_track.sh` 手动加 URL 仍可用，同样受缓存策略约束
+
+### 想更"只暂存"
+```ini
+# /etc/systemd/system/xiaozhi-music.service
+Environment=CACHE_TTL_HOURS=0.5
+Environment=CACHE_MAX_MB=120
+```

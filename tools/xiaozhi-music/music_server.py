@@ -1231,24 +1231,43 @@ _prefetch_queue = []
 _PREFETCH_BUSY = [False]
 
 
-def prefetch_worker():
-    """后台把预取队列里的 cc 曲目下载到本地（并行 3 路）"""
-    import threading as _th
+CACHE_TTL_SEC = int(os.environ.get("CACHE_TTL_HOURS", "2")) * 3600
+CACHE_MAX_BYTES = int(os.environ.get("CACHE_MAX_MB", "300")) * 1024 * 1024
+
+
+def cache_maintain():
+    """服务器只做"暂存"：过期(TTL) 或超容量(MAX) 就删，不长期保存"""
     while True:
-        if not _prefetch_queue:
-            time.sleep(3)
-            continue
-        batch = []
-        while _prefetch_queue and len(batch) < 3:
-            sid = _prefetch_queue.pop(0)
-            f = os.path.join(LIB_DIR, "lib_%s.mp3" % sid)
-            if not os.path.exists(f):
-                batch.append(sid)
-        for sid in batch:
-            u = free_url(sid)
-            if u:
-                acquire_to_library(sid, u, sid, "ccMixter", "", "CC")
-        time.sleep(2)
+        try:
+            now = time.time()
+            files = []
+            total = 0
+            for fn in os.listdir(LIB_DIR):
+                if not fn.lower().endswith(".mp3"):
+                    continue
+                full = os.path.join(LIB_DIR, fn)
+                try:
+                    st = os.stat(full)
+                except Exception:
+                    continue
+                if now - st.st_mtime > CACHE_TTL_SEC:
+                    os.remove(full)
+                    log("cache expire: %s" % fn)
+                    continue
+                files.append((st.st_mtime, st.st_size, full))
+                total += st.st_size
+            files.sort()   # 最旧在前
+            while total > CACHE_MAX_BYTES and files:
+                mt, sz, full = files.pop(0)
+                try:
+                    os.remove(full)
+                    total -= sz
+                    log("cache evict: %s (%.1fMB)" % (os.path.basename(full), sz / 1048576.0))
+                except Exception:
+                    pass
+        except Exception as e:
+            log("cache maintain error: %r" % (e,))
+        time.sleep(300)
 
 
 def lib_url(song_id):
@@ -1513,11 +1532,6 @@ def free_candidates(song, artist="", limit=6, offset=0):
             items.append(c)
     for c in free_search(song, artist, limit, offset):
         cid = str(c.get("id", ""))
-        if cid.startswith("cc"):
-            # ccMixter 源站只有 ~72KB/s，未落盘的不要出现在结果里（否则点播要等 30~60s）
-            if not os.path.exists(os.path.join(LIB_DIR, "lib_%s.mp3" % cid)):
-                _prefetch_queue.append(cid)
-                continue
         if all(cid != i["id"] for i in items):
             items.append(c)
     if items and _is_genre_query(song):
