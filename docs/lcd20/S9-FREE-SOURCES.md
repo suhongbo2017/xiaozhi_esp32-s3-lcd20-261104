@@ -172,3 +172,30 @@ GET /stream_ogg?id=lb12 404                    ← MP3 路径被拒后回退旧�
 搜「钢琴」→ lb4 Fig Leaf Rag / lb8 Gymnopedie No 1
 曲库文件数：26（harvest 持续增长，55MB）
 ```
+
+---
+
+## 10. 解决"55 秒才起播"（2026-11-16）
+
+用户实测 ccMixter 源站只有 ~72KB/s，一首 4MB 要 55 秒 → **不可接受**。
+
+### 新策略：搜索结果只给"能秒开"的曲子
+1. **`/search` 不再返回未落盘的 ccMixter 曲目**（`lib_cc<id>.mp3` 不存在的直接过滤掉），
+   同时把它推进 `_prefetch_queue`，后台 `prefetch_worker()`（3 路）先下载
+2. 本地库（`lb*`）+ Incompetech 曲目（已在本地）优先返回
+3. `harvest.py` 升级为 **4 路并行下载**、跳过 >6MB 的大文件、每标签 20 首、14 个标签
+4. 曲库扩张速度：约 **10 首/分钟**（41 首 / 123MB 起步，持续增长）
+
+### 实测（改后）
+```
+搜「歌曲」→ lb23 No Meaning No / lb24 Warning Shots / lb25 Below(Smooth Low Mix)   ← 全部本地
+搜「jazz」→ lb0 Airport Lounge / lb1 Bossa Antigua / lb7 George Street Shuffle
+/play?id=lb23 → /library/lib_cc162.mp3
+首字节 0.065s（65 毫秒），整首 5.25MB 走完 11.8s（≈440KB/s，公网正常速度）
+```
+对比修复前：55 秒起播 → **65 毫秒起播**。
+
+### 代价与边界
+- 没落盘的曲目不会出现在结果里，助手会提示"曲库准备中/换个风格"
+- `/library` 仍不支持 Range（暂无 seek/续传）
+- 曲库规模决定覆盖率：持续跑 harvest.py 即可（磁盘按 3.5MB/首 估算）

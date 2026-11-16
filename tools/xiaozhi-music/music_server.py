@@ -1227,6 +1227,30 @@ def acquire_to_library(sid, remote_url, title="", artist="", tags="", license_na
     threading.Thread(target=job, daemon=True).start()
 
 
+_prefetch_queue = []
+_PREFETCH_BUSY = [False]
+
+
+def prefetch_worker():
+    """后台把预取队列里的 cc 曲目下载到本地（并行 3 路）"""
+    import threading as _th
+    while True:
+        if not _prefetch_queue:
+            time.sleep(3)
+            continue
+        batch = []
+        while _prefetch_queue and len(batch) < 3:
+            sid = _prefetch_queue.pop(0)
+            f = os.path.join(LIB_DIR, "lib_%s.mp3" % sid)
+            if not os.path.exists(f):
+                batch.append(sid)
+        for sid in batch:
+            u = free_url(sid)
+            if u:
+                acquire_to_library(sid, u, sid, "ccMixter", "", "CC")
+        time.sleep(2)
+
+
 def lib_url(song_id):
     try:
         idx = int(str(song_id)[2:])
@@ -1488,7 +1512,13 @@ def free_candidates(song, artist="", limit=6, offset=0):
         if all(c["id"] != i["id"] for i in items):
             items.append(c)
     for c in free_search(song, artist, limit, offset):
-        if all(c["id"] != i["id"] for i in items):
+        cid = str(c.get("id", ""))
+        if cid.startswith("cc"):
+            # ccMixter 源站只有 ~72KB/s，未落盘的不要出现在结果里（否则点播要等 30~60s）
+            if not os.path.exists(os.path.join(LIB_DIR, "lib_%s.mp3" % cid)):
+                _prefetch_queue.append(cid)
+                continue
+        if all(cid != i["id"] for i in items):
             items.append(c)
     if items and _is_genre_query(song):
         return items[:max(limit, 6)]
