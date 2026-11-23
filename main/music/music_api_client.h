@@ -61,6 +61,9 @@ public:
     bool StockQuote(const std::string& code, std::string* out_json);
     bool StockSearch(const std::string& keyword, std::string* out_json);
 
+    /** 重新读取 NVS 里的 api_url/api_secret（网页改地址后调用，无需重启） */
+    void Reload();
+
     /* ---- 配置 ---- */
     bool configured() const { return !base_url_.empty(); }
     const std::string& base_url() const { return base_url_; }

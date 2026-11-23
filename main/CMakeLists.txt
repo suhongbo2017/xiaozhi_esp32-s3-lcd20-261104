@@ -41,6 +41,7 @@ set(SOURCES "audio/audio_codec.cc"
             "music/mp3_stream_player.cc"
             "music/minimp3/minimp3_impl.c"
             "market/stock_tools.cc"
+            "web/admin_server.cc"
             "system_info.cc"
             "application.cc"
             "ota.cc"
@@ -50,7 +51,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "music" "market" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+set(INCLUDE_DIRS "." "display" "music" "market" "web" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
 # Add board common files
 list(APPEND SOURCES
@@ -1102,6 +1103,7 @@ idf_component_register(SRCS ${SOURCES}
                         esp_driver_jpeg
                         esp_driver_ppa
                         esp_driver_tsens
+                        esp_http_server
                         esp_app_format
                         app_update
                         spi_flash

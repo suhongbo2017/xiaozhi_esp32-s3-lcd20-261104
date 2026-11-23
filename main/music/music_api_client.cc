@@ -77,6 +77,17 @@ MusicApiClient::MusicApiClient() {
     ESP_LOGI(TAG, "music API: %s (mac=%s)", base_url_.c_str(), mac_.c_str());
 }
 
+void MusicApiClient::Reload() {
+    Settings settings("music", false);
+    std::string url = settings.GetString("api_url", kDefaultBaseUrl);
+    while (!url.empty() && url.back() == '/') {
+        url.pop_back();
+    }
+    base_url_ = url;
+    secret_ = settings.GetString("api_secret", kDefaultSecret);
+    ESP_LOGI(TAG, "music API reloaded: %s", base_url_.c_str());
+}
+
 int MusicApiClient::HttpGet(const std::string& path_and_query, std::string* body, int timeout_ms) {
     if (base_url_.empty()) {
         return -1;

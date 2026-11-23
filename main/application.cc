@@ -6,6 +6,7 @@
 #include "display.h"
 #include "mcp_server.h"
 #include "market/stock_tools.h"
+#include "web/admin_server.h"
 #include "music/music_player.h"
 #include "mqtt_protocol.h"
 #include "settings.h"
@@ -111,6 +112,10 @@ void Application::Initialize() {
     MusicPlayer::GetInstance().Initialize();
     StockTools::Initialize();
 
+    /* 设备管理网页（8080）：主题/亮度/音量/灯/音乐服务地址
+     * 注意：httpd_start 需要 lwIP 已初始化，必须等网络连上后再启动 */
+    AdminServer::ApplyPersisted();
+
     // Set network event callback for UI updates and network state handling
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
         auto display = Board::GetInstance().GetDisplay();
@@ -138,6 +143,7 @@ void Application::Initialize() {
                 msg += data;
                 display->ShowNotification(msg.c_str(), 30000);
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
+                AdminServer::Start();   /* 网络就绪后再起管理网页（8080） */
                 break;
             }
             case NetworkEvent::Disconnected:
@@ -1281,7 +1287,8 @@ bool Application::StartMusicMp3(const std::string& audio_url, const std::vector<
     /* 播放期间 ducking，保证唤醒词仍可打断 */
     if (auto codec = board.GetAudioCodec()) {
         const int volume = codec->output_volume();
-        const int ducked = volume * CONFIG_MUSIC_DUCK_VOLUME_PERCENT / 100;
+        const int duck_pct = Settings("music", false).GetInt("duck_volume_percent", CONFIG_MUSIC_DUCK_VOLUME_PERCENT);
+        const int ducked = volume * duck_pct / 100;
         if (volume > 0 && ducked != volume) {
             music_saved_volume_ = volume;
             codec->SetOutputVolume(ducked < 10 ? 10 : ducked);
@@ -1339,7 +1346,8 @@ bool Application::StartMusicNow(const std::string& audio_url, const std::vector<
      * 播放期间把输出音量降到 CONFIG_MUSIC_DUCK_VOLUME_PERCENT%，停播时恢复。 */
     if (auto codec = board.GetAudioCodec()) {
         const int volume = codec->output_volume();
-        const int ducked = volume * CONFIG_MUSIC_DUCK_VOLUME_PERCENT / 100;
+        const int duck_pct = Settings("music", false).GetInt("duck_volume_percent", CONFIG_MUSIC_DUCK_VOLUME_PERCENT);
+        const int ducked = volume * duck_pct / 100;
         if (volume > 0 && ducked != volume) {
             music_saved_volume_ = volume;
             codec->SetOutputVolume(ducked < 10 ? 10 : ducked);
