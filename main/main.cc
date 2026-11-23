@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "web/asset_ota.h"
 
 #define TAG "main"
 
@@ -21,6 +22,9 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    /* 外观资源热更新：在 LVGL / assets 初始化之前执行（完成后会重启） */
+    AssetOta::ApplyIfPending();
 
     // Initialize and run the application
     auto& app = Application::GetInstance();

@@ -1,6 +1,7 @@
 #include "admin_server.h"
 
 #include "audio_codec.h"
+#include "asset_ota.h"
 #include "board.h"
 #include "display.h"
 #include "display/lvgl_display/lvgl_theme.h"
@@ -10,9 +11,16 @@
 
 #include <cJSON.h>
 #include <esp_http_server.h>
+#include <esp_partition.h>
+#include <esp_system.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 
 #include <cstdio>
+#include <cstring>
+#include <vector>
 #include <cstring>
 #include <string>
 
@@ -76,6 +84,19 @@ pre{background:#0b1a2a;border-radius:10px;padding:10px;font-size:12px;overflow:a
   <div class="tip">改完保存立即生效（无需重启）</div>
 </div>
 
+<div class="card">
+  <div class="row"><label>外观资源（字体 / 表情）</label>
+    <select id="variant">
+      <option value="a20_e64" selected>20px 字体 + 64px 表情（推荐）</option>
+      <option value="a16_e32">16px 字体 + 32px 表情（省空间）</option>
+      <option value="a30_e64">30px 字体 + 64px 表情（大字）</option>
+    </select>
+  </div>
+  <button id="applyAssets" style="background:#ff9f43">应用并重启</button>
+  <div class="tip warn" id="amsg"></div>
+  <div class="tip">会下载资源包写入设备 assets 分区并自动重启（约 5~20 秒）</div>
+</div>
+
 <button id="save">保存并应用</button>
 <div class="tip ok" id="msg"></div>
 <div class="card" style="opacity:.85">
@@ -123,6 +144,17 @@ $('save').onclick = async () => {
     $('msg').textContent = j.ok ? '已应用 ✓' : ('失败：'+(j.error||''));
     load();
   }catch(e){ $('msg').textContent='请求失败：'+e; }
+};
+$('applyAssets').onclick = async () => {
+  const v = $('variant').value;
+  if(!confirm('将把「'+v+'」资源包写入设备并重启，确定吗？')) return;
+  $('amsg').textContent = '下载中，请稍候…（设备会自动重启）';
+  try{
+    const r = await fetch('/api/assets',{method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({url:'http://47.116.199.150:2233/assets/'+v+'.bin'})});
+    const j = await r.json();
+    $('amsg').textContent = j.ok ? '已开始写入，设备即将重启…' : ('失败：'+(j.error||''));
+  }catch(e){ $('amsg').textContent = '请求失败：'+e; }
 };
 load();
 </script></body></html>)HTML";
@@ -188,6 +220,44 @@ std::string BuildStatusJson() {
     cJSON_free(out);
     cJSON_Delete(root);
     return json;
+}
+
+
+/* ---------------- 外观资源包（字体/表情）安全热更新 ----------------
+ * 不在运行中直接改写 assets（会与 LVGL 读取冲突导致崩溃/变砖），
+ * 改为：下载到 ota_1 暂存 -> 重启 -> 启动早期由 AssetOta::ApplyIfPending() 写入。
+ */
+
+esp_err_t HandleAssetsApply(httpd_req_t* req) {
+    char buf[512];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"empty\"}");
+        return ESP_FAIL;
+    }
+    buf[len] = 0;
+    cJSON* root = cJSON_Parse(buf);
+    if (root == nullptr) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"bad json\"}");
+        return ESP_FAIL;
+    }
+    auto* url_item = cJSON_GetObjectItem(root, "url");
+    std::string url = cJSON_IsString(url_item) ? url_item->valuestring : "";
+    cJSON_Delete(root);
+    if (url.size() < 10) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"bad url\"}");
+        return ESP_FAIL;
+    }
+    if (!AssetOta::StageFromUrl(url)) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"stage_failed\"}");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"reboot\":true}");
+    /* 让响应先发出去，再重启 */
+    vTaskDelay(pdMS_TO_TICKS(300));
+    esp_restart();
+    return ESP_OK;
 }
 
 esp_err_t HandleRoot(httpd_req_t* req) {
@@ -319,9 +389,11 @@ bool AdminServer::Start() {
     httpd_uri_t uri_root = {.uri = "/", .method = HTTP_GET, .handler = HandleRoot, .user_ctx = nullptr};
     httpd_uri_t uri_status = {.uri = "/api/status", .method = HTTP_GET, .handler = HandleStatus, .user_ctx = nullptr};
     httpd_uri_t uri_settings = {.uri = "/api/settings", .method = HTTP_POST, .handler = HandleSettings, .user_ctx = nullptr};
+    httpd_uri_t uri_assets = {.uri = "/api/assets", .method = HTTP_POST, .handler = HandleAssetsApply, .user_ctx = nullptr};
     httpd_register_uri_handler(g_server, &uri_root);
     httpd_register_uri_handler(g_server, &uri_status);
     httpd_register_uri_handler(g_server, &uri_settings);
+    httpd_register_uri_handler(g_server, &uri_assets);
     ESP_LOGI(TAG, "admin web: http://<device-ip>:8080/");
     return true;
 }
