@@ -33,11 +33,18 @@ namespace {
  * 底部：提示文字
  */
 constexpr int kPad = 10;
-constexpr int kClockY = 26;
-constexpr int kDateY = 96;
-constexpr int kWeatherY = 128;
-constexpr int kStockY = 196;
-constexpr int kStockLineH = 34;
+constexpr int kClockY = 14;
+constexpr int kDateY = 78;
+constexpr int kWeatherY = 118;
+constexpr int kStockY = 170;
+constexpr int kStockLineH = 32;
+
+/* 三列：名称 | 价格(右对齐) | 涨跌幅(右对齐)，宽度加起来不超 240-2*kPad */
+constexpr int kNameW = 48;         /* “纳指/标普/上证” 2 字 = 40px */
+constexpr int kPriceX = kPad + kNameW + 2;
+constexpr int kPriceW = 96;
+constexpr int kPctX = kPriceX + kPriceW + 4;
+constexpr int kPctW = 240 - kPad - kPctX;
 
 constexpr uint32_t kBgTop = 0x0B1622;
 constexpr uint32_t kBgBottom = 0x04070C;
@@ -173,23 +180,31 @@ void StandbyPage::CreateIfNeeded() {
 
     /* 指数/个股：名称 + 价格/涨跌幅 */
     for (int i = 0; i < 3; i++) {
+        const int y = kStockY + i * kStockLineH;
+
         stock_name_[i] = CreateLabel(root_, TextFont(display_), 0xC8D4E0);
-        lv_obj_set_pos(stock_name_[i], kPad, kStockY + i * kStockLineH);
-        lv_obj_set_width(stock_name_[i], 118);
-        lv_label_set_long_mode(stock_name_[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_pos(stock_name_[i], kPad, y);
+        lv_obj_set_width(stock_name_[i], kNameW);
+        lv_label_set_long_mode(stock_name_[i], LV_LABEL_LONG_CLIP);
         lv_label_set_text(stock_name_[i], "");
 
-        stock_price_[i] = CreateLabel(root_, TextFont(display_), kFlat);
-        lv_obj_set_pos(stock_price_[i], kPad + 120, kStockY + i * kStockLineH);
-        lv_obj_set_width(stock_price_[i], w - kPad * 2 - 120);
+        stock_price_[i] = CreateLabel(root_, &lv_font_montserrat_24, kFlat);
+        lv_obj_set_pos(stock_price_[i], kPriceX, y - 3);
+        lv_obj_set_width(stock_price_[i], kPriceW);
         lv_obj_set_style_text_align(stock_price_[i], LV_TEXT_ALIGN_RIGHT, 0);
         lv_label_set_text(stock_price_[i], "");
+
+        stock_pct_[i] = CreateLabel(root_, &lv_font_montserrat_14, kFlat);
+        lv_obj_set_pos(stock_pct_[i], kPctX, y + 4);
+        lv_obj_set_width(stock_pct_[i], kPctW);
+        lv_obj_set_style_text_align(stock_pct_[i], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_label_set_text(stock_pct_[i], "");
     }
 
     hint_label_ = CreateLabel(root_, TextFont(display_), kAccent);
     lv_obj_set_width(hint_label_, w);
     lv_obj_set_style_text_align(hint_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(hint_label_, 0, h - 34);
+    lv_obj_set_pos(hint_label_, 0, h - 30);
     lv_label_set_text(hint_label_, "说“你好小智”开始对话");
 }
 
@@ -207,6 +222,7 @@ void StandbyPage::Destroy() {
     for (int i = 0; i < 3; i++) {
         stock_name_[i] = nullptr;
         stock_price_[i] = nullptr;
+        stock_pct_[i] = nullptr;
     }
 }
 
@@ -287,19 +303,31 @@ void StandbyPage::SetStocks(const std::vector<StockItem>& stocks) {
         if (i >= static_cast<int>(stocks.size()) || !stocks[i].valid) {
             lv_label_set_text(stock_name_[i], "");
             lv_label_set_text(stock_price_[i], "");
+            if (stock_pct_[i] != nullptr) {
+                lv_label_set_text(stock_pct_[i], "");
+            }
             continue;
         }
         const auto& s = stocks[i];
         lv_label_set_text(stock_name_[i], s.name.c_str());
-        char buf[48];
-        if (s.change_pct >= 0) {
-            snprintf(buf, sizeof(buf), "%.2f +%.2f%%", s.price, s.change_pct);
-            lv_obj_set_style_text_color(stock_price_[i], lv_color_hex(kUp), 0);
+
+        char price[24];
+        if (s.price >= 1000.0f) {
+            snprintf(price, sizeof(price), "%.0f", s.price);   /* 万点级不显示小数，省宽度 */
         } else {
-            snprintf(buf, sizeof(buf), "%.2f %.2f%%", s.price, s.change_pct);
-            lv_obj_set_style_text_color(stock_price_[i], lv_color_hex(kDown), 0);
+            snprintf(price, sizeof(price), "%.2f", s.price);
         }
-        lv_label_set_text(stock_price_[i], buf);
+        lv_label_set_text(stock_price_[i], price);
+
+        char pct[16];
+        snprintf(pct, sizeof(pct), "%+.2f%%", s.change_pct);
+        if (stock_pct_[i] != nullptr) {
+            lv_label_set_text(stock_pct_[i], pct);
+            const uint32_t color = s.change_pct > 0.0001f ? kUp : (s.change_pct < -0.0001f ? kDown : kFlat);
+            lv_obj_set_style_text_color(stock_pct_[i], lv_color_hex(color), 0);
+        }
+        const uint32_t pcolor = s.change_pct > 0.0001f ? kUp : (s.change_pct < -0.0001f ? kDown : kFlat);
+        lv_obj_set_style_text_color(stock_price_[i], lv_color_hex(pcolor), 0);
     }
 }
 

@@ -71,6 +71,7 @@ private:
     lv_obj_t* weather_label_ = nullptr;
     lv_obj_t* stock_name_[3] = {nullptr, nullptr, nullptr};
     lv_obj_t* stock_price_[3] = {nullptr, nullptr, nullptr};
+    lv_obj_t* stock_pct_[3] = {nullptr, nullptr, nullptr};
     lv_obj_t* hint_label_ = nullptr;
 #endif
 };

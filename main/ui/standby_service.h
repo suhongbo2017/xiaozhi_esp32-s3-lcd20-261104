@@ -56,7 +56,7 @@ private:
     std::atomic<bool> net_ready_{false};
     std::atomic<bool> dirty_{true};
     std::string city_ = "上海";
-    std::string symbols_ = "sh000001,sz399001,sz399006";
+    std::string symbols_ = "usIXIC,usINX,sh000001";
     volatile bool started_ = false;
 
     /* 最近一次拉取的数据：页面首次显示时补一次（页面未创建时 setter 是空操作） */

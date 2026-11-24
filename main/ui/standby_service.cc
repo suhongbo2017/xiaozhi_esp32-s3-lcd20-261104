@@ -43,12 +43,12 @@ void StandbyService::LoadConfig() {
     Settings settings("standby", false);
     enabled_ = settings.GetInt("enabled", 1) != 0;
     city_ = settings.GetString("city", "上海");
-    symbols_ = settings.GetString("symbols", "sh000001,sz399001,sz399006");
+    symbols_ = settings.GetString("symbols", "usIXIC,usINX,sh000001");
     if (city_.empty()) {
         city_ = "上海";
     }
     if (symbols_.empty()) {
-        symbols_ = "sh000001,sz399001,sz399006";
+        symbols_ = "usIXIC,usINX,sh000001";
     }
 }
 
@@ -207,10 +207,15 @@ void StandbyService::Tick() {
                         for (int i = 0; i < n && i < 3; i++) {
                             const cJSON* it = cJSON_GetArrayItem(arr, i);
                             StandbyPage::StockItem s;
+                            const cJSON* short_name = cJSON_GetObjectItem(it, "short");
                             const cJSON* name = cJSON_GetObjectItem(it, "name");
                             const cJSON* price = cJSON_GetObjectItem(it, "price");
                             const cJSON* pct = cJSON_GetObjectItem(it, "change_pct");
-                            s.name = cJSON_IsString(name) ? name->valuestring : "";
+                            if (cJSON_IsString(short_name) && short_name->valuestring[0]) {
+                                s.name = short_name->valuestring;
+                            } else {
+                                s.name = cJSON_IsString(name) ? name->valuestring : "";
+                            }
                             s.price = cJSON_IsNumber(price) ? (float)price->valuedouble : 0;
                             s.change_pct = cJSON_IsNumber(pct) ? (float)pct->valuedouble : 0;
                             s.valid = !s.name.empty();
