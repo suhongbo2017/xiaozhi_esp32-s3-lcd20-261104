@@ -176,7 +176,8 @@ button.ghost{background:#1b3350;color:#cfe3f7}
     <div class="tip">改完保存立即生效（无需重启）</div>
   </div>
   <div class="card">
-    <button class="ghost" onclick="reboot()">重启设备</button>
+    <button class="ghost" onclick="chatTest()">预览聊天气泡样式</button>
+    <button class="ghost" onclick="reboot()" style="margin-top:8px">重启设备</button>
     <div class="tip">重启约 8 秒；开机图片改动需要重启才能看到</div>
   </div>
   <div class="card" style="opacity:.9">
@@ -376,6 +377,12 @@ $('save').onclick = async () => {
     load();
   }catch(e){ $('msg').textContent='请求失败：'+e; }
 };
+async function chatTest(){
+  try{
+    await fetch('/api/chat_test',{method:'POST'});
+    $('msg').textContent = '已发送样例消息，看一眼屏幕（说完话后气泡会被清空）';
+  }catch(e){ $('msg').textContent='失败：'+e; }
+}
 async function reboot(){
   if(!confirm('确定重启设备吗？')) return;
   $('msg').textContent = '重启中…约 8 秒后刷新页面';
@@ -507,6 +514,22 @@ esp_err_t HandleAssetsApply(httpd_req_t* req) {
  * POST /api/image?kind=boot|bg        直接上传 JPEG 字节（网页用 canvas 缩放到 240x320）
  * POST /api/image?kind=boot|bg&clear=1 清除
  */
+/* 调试用：往聊天区塞几条示例消息，方便在不动嘴的情况下检查气泡样式 */
+esp_err_t HandleChatTest(httpd_req_t* req) {
+    auto display = Board::GetInstance().GetDisplay();
+    if (display == nullptr) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no display\"}");
+        return ESP_FAIL;
+    }
+    display->SetChatMessage("system", "样式预览 · 微信风格气泡");
+    display->SetChatMessage("user", "今天天气怎么样？帮我看看纳指涨了没有");
+    display->SetChatMessage("assistant", "上海今天多云，12 度，湿度 54%。纳指 24089，涨 6.51%，标普 7237，涨 4.73%。");
+    display->SetChatMessage("user", "好的谢谢");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 esp_err_t HandleReboot(httpd_req_t* req) {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true,\"reboot\":true}");
@@ -779,6 +802,7 @@ bool AdminServer::Start() {
     httpd_uri_t uri_settings = {.uri = "/api/settings", .method = HTTP_POST, .handler = HandleSettings, .user_ctx = nullptr};
     httpd_uri_t uri_assets = {.uri = "/api/assets", .method = HTTP_POST, .handler = HandleAssetsApply, .user_ctx = nullptr};
     httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
+    httpd_uri_t uri_chat_test = {.uri = "/api/chat_test", .method = HTTP_POST, .handler = HandleChatTest, .user_ctx = nullptr};
     httpd_uri_t uri_image_get = {.uri = "/api/image", .method = HTTP_GET, .handler = HandleImageGet, .user_ctx = nullptr};
     httpd_uri_t uri_image_post = {.uri = "/api/image", .method = HTTP_POST, .handler = HandleImagePost, .user_ctx = nullptr};
     httpd_register_uri_handler(g_server, &uri_root);
@@ -786,6 +810,7 @@ bool AdminServer::Start() {
     httpd_register_uri_handler(g_server, &uri_settings);
     httpd_register_uri_handler(g_server, &uri_assets);
     httpd_register_uri_handler(g_server, &uri_reboot);
+    httpd_register_uri_handler(g_server, &uri_chat_test);
     httpd_register_uri_handler(g_server, &uri_image_get);
     httpd_register_uri_handler(g_server, &uri_image_post);
     ESP_LOGI(TAG, "admin web: http://<device-ip>:8080/");

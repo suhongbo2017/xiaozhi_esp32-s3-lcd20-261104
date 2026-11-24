@@ -34,10 +34,11 @@ void LcdDisplay::InitializeLcdThemes() {
     auto light_theme = new LvglTheme("light");
     light_theme->set_background_color(lv_color_hex(0xFFFFFF));
     light_theme->set_text_color(lv_color_hex(0x000000));
-    light_theme->set_chat_background_color(lv_color_hex(0xE0E0E0));
-    light_theme->set_user_bubble_color(lv_color_hex(0x00FF00));
-    light_theme->set_assistant_bubble_color(lv_color_hex(0xDDDDDD));
-    light_theme->set_system_bubble_color(lv_color_hex(0xFFFFFF));
+    /* 微信风格：浅灰聊天底 + 绿色（我）/ 白色（对方）气泡 */
+    light_theme->set_chat_background_color(lv_color_hex(0xEDEDED));
+    light_theme->set_user_bubble_color(lv_color_hex(0x95EC69));
+    light_theme->set_assistant_bubble_color(lv_color_hex(0xFFFFFF));
+    light_theme->set_system_bubble_color(lv_color_hex(0xDCDCDC));
     light_theme->set_system_text_color(lv_color_hex(0x000000));
     light_theme->set_border_color(lv_color_hex(0x000000));
     light_theme->set_low_battery_color(lv_color_hex(0x000000));
@@ -50,10 +51,11 @@ void LcdDisplay::InitializeLcdThemes() {
     auto dark_theme = new LvglTheme("dark");
     dark_theme->set_background_color(lv_color_hex(0x000000));
     dark_theme->set_text_color(lv_color_hex(0xFFFFFF));
-    dark_theme->set_chat_background_color(lv_color_hex(0x1F1F1F));
-    dark_theme->set_user_bubble_color(lv_color_hex(0x00FF00));
-    dark_theme->set_assistant_bubble_color(lv_color_hex(0x222222));
-    dark_theme->set_system_bubble_color(lv_color_hex(0x000000));
+    /* 微信深色模式：深绿气泡 + 深灰气泡 + 近黑背景 */
+    dark_theme->set_chat_background_color(lv_color_hex(0x111111));
+    dark_theme->set_user_bubble_color(lv_color_hex(0x3EB575));
+    dark_theme->set_assistant_bubble_color(lv_color_hex(0x2C2C2E));
+    dark_theme->set_system_bubble_color(lv_color_hex(0x1F1F1F));
     dark_theme->set_system_text_color(lv_color_hex(0xFFFFFF));
     dark_theme->set_border_color(lv_color_hex(0xFFFFFF));
     dark_theme->set_low_battery_color(lv_color_hex(0xFF0000));
@@ -577,134 +579,127 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
 
     auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
 
-    // Create a message bubble
-    lv_obj_t* msg_bubble = lv_obj_create(content_);
-    lv_obj_set_style_radius(msg_bubble, 8, 0);
+    /* ---------------- 微信风格气泡 ----------------
+     * 一行 = [头像] [气泡(带小尾巴)] 或 [气泡] [头像]
+     *  - 我（user）：右对齐、绿色气泡、头像在右
+     *  - 小智（assistant）：左对齐、白色气泡、头像在左
+     *  - 系统（system）：居中灰色胶囊，无头像
+     */
+    const bool is_user = strcmp(role, "user") == 0;
+    const bool is_system = strcmp(role, "system") == 0;
+    const char* role_tag = is_user ? "user" : (is_system ? "system" : "assistant");
+
+    constexpr int kAvatarSize = 26;
+    constexpr int kAvatarGap = 6;
+    const lv_coord_t row_w = LV_HOR_RES - 2 * lvgl_theme->spacing(4);
+    const lv_coord_t max_bubble_w =
+        row_w - (is_system ? 0 : kAvatarSize + kAvatarGap) - 10;
+
+    /* ---- 一行容器 ---- */
+    lv_obj_t* row = lv_obj_create(content_);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, row_w);
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, is_user ? LV_FLEX_ALIGN_END
+                                       : (is_system ? LV_FLEX_ALIGN_CENTER : LV_FLEX_ALIGN_START),
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, kAvatarGap, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* ---- 头像（我 / AI） ---- */
+    auto make_avatar = [&](const char* text, uint32_t bg) {
+        lv_obj_t* av = lv_obj_create(row);
+        lv_obj_remove_style_all(av);
+        lv_obj_set_size(av, kAvatarSize, kAvatarSize);
+        lv_obj_set_style_radius(av, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(av, lv_color_hex(bg), 0);
+        lv_obj_set_style_bg_opa(av, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(av, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t* av_text = lv_label_create(av);
+        lv_label_set_text(av_text, text);
+        lv_obj_set_style_text_color(av_text, lv_color_hex(0xFFFFFF), 0);
+        if (auto tf = lvgl_theme->text_font()) {
+            lv_obj_set_style_text_font(av_text, tf->font(), 0);
+        }
+        lv_obj_center(av_text);
+        return av;
+    };
+    if (!is_system && !is_user) {
+        make_avatar("AI", 0x3A7AFE);
+    }
+
+    /* ---- 气泡 ---- */
+    lv_obj_t* msg_bubble = lv_obj_create(row);
+    lv_obj_set_style_radius(msg_bubble, 10, 0);
     lv_obj_set_scrollbar_mode(msg_bubble, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_border_width(msg_bubble, 0, 0);
     lv_obj_set_style_pad_all(msg_bubble, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_pad_hor(msg_bubble, 8, 0);
+    lv_obj_set_style_pad_ver(msg_bubble, 5, 0);
+    lv_obj_set_style_bg_opa(msg_bubble, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(msg_bubble, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_user_data(msg_bubble, (void*)role_tag);
 
-    // Create the message text
+    if (is_user) {
+        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->user_bubble_color(), 0);
+        lv_obj_set_style_text_color(msg_bubble, lvgl_theme->text_color(), 0);
+    } else if (is_system) {
+        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->system_bubble_color(), 0);
+        lv_obj_set_style_text_color(msg_bubble, lvgl_theme->system_text_color(), 0);
+        lv_obj_set_style_radius(msg_bubble, 8, 0);
+    } else {
+        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->assistant_bubble_color(), 0);
+        lv_obj_set_style_text_color(msg_bubble, lvgl_theme->text_color(), 0);
+    }
+
+    /* ---- 文本（先量宽度，再夹到最大宽度内） ---- */
     lv_obj_t* msg_text = lv_label_create(msg_bubble);
     lv_label_set_text(msg_text, content);
+    if (auto tf = lvgl_theme->text_font()) {
+        lv_obj_set_style_text_font(msg_text, tf->font(), 0);
+    }
+    lv_obj_set_style_text_color(msg_text, lvgl_theme->text_color(), 0);
+    if (is_system) {
+        lv_obj_set_style_text_color(msg_text, lvgl_theme->system_text_color(), 0);
+    }
 
-    // Calculate bubble width constraints
-    lv_coord_t max_width = LV_HOR_RES * 85 / 100 - 16;  // 85% of screen width
-    lv_coord_t min_width = 20;
-
-    // Let LVGL calculate the natural text width first
     lv_obj_set_width(msg_text, LV_SIZE_CONTENT);
     lv_obj_update_layout(msg_text);
     lv_coord_t text_width = lv_obj_get_width(msg_text);
-
-    // Ensure text width is not less than minimum width
-    if (text_width < min_width) {
-        text_width = min_width;
+    if (text_width < 20) {
+        text_width = 20;
     }
-
-    // Constrain to max width
-    lv_coord_t bubble_width = (text_width < max_width) ? text_width : max_width;
-
-    // Set message text width
-    lv_obj_set_width(msg_text, bubble_width);
+    if (text_width > max_bubble_w) {
+        text_width = max_bubble_w;
+    }
+    lv_obj_set_width(msg_text, text_width);
     lv_label_set_long_mode(msg_text, LV_LABEL_LONG_WRAP);
 
-    // Set bubble width
-    lv_obj_set_width(msg_bubble, bubble_width);
-    lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
-
-    // Set alignment and style based on message role
-    if (strcmp(role, "user") == 0) {
-        // User messages are right-aligned with green background
-        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->user_bubble_color(), 0);
-        lv_obj_set_style_bg_opa(msg_bubble, LV_OPA_70, 0);
-        // Set text color for contrast
-        lv_obj_set_style_text_color(msg_text, lvgl_theme->text_color(), 0);
-
-        // Set custom attribute to mark bubble type
-        lv_obj_set_user_data(msg_bubble, (void*)"user");
-
-        // Set appropriate width for content
-        lv_obj_set_width(msg_bubble, LV_SIZE_CONTENT);
-        lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
-
-        // Don't grow
-        lv_obj_set_style_flex_grow(msg_bubble, 0, 0);
-    } else if (strcmp(role, "assistant") == 0) {
-        // Assistant messages are left-aligned with white background
-        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->assistant_bubble_color(), 0);
-        lv_obj_set_style_bg_opa(msg_bubble, LV_OPA_70, 0);
-        // Set text color for contrast
-        lv_obj_set_style_text_color(msg_text, lvgl_theme->text_color(), 0);
-
-        // Set custom attribute to mark bubble type
-        lv_obj_set_user_data(msg_bubble, (void*)"assistant");
-
-        // Set appropriate width for content
-        lv_obj_set_width(msg_bubble, LV_SIZE_CONTENT);
-        lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
-
-        // Don't grow
-        lv_obj_set_style_flex_grow(msg_bubble, 0, 0);
-    } else if (strcmp(role, "system") == 0) {
-        // System messages are center-aligned with light gray background
-        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->system_bubble_color(), 0);
-        lv_obj_set_style_bg_opa(msg_bubble, LV_OPA_70, 0);
-        // Set text color for contrast
-        lv_obj_set_style_text_color(msg_text, lvgl_theme->system_text_color(), 0);
-
-        // Set custom attribute to mark bubble type
-        lv_obj_set_user_data(msg_bubble, (void*)"system");
-
-        // Set appropriate width for content
-        lv_obj_set_width(msg_bubble, LV_SIZE_CONTENT);
-        lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
-
-        // Don't grow
-        lv_obj_set_style_flex_grow(msg_bubble, 0, 0);
+    /* ---- 小尾巴（微信气泡尖角）：旋转 45° 的小方块，压在气泡边缘 ---- */
+    if (!is_system) {
+        lv_obj_t* tail = lv_obj_create(msg_bubble);
+        lv_obj_remove_style_all(tail);
+        lv_obj_set_size(tail, 10, 10);
+        lv_obj_set_style_radius(tail, 2, 0);
+        lv_obj_set_style_bg_color(
+            tail, is_user ? lvgl_theme->user_bubble_color() : lvgl_theme->assistant_bubble_color(), 0);
+        lv_obj_set_style_bg_opa(tail, LV_OPA_COVER, 0);
+        lv_obj_set_style_transform_rotation(tail, 450, 0);   /* 45.0° */
+        if (is_user) {
+            lv_obj_align(tail, LV_ALIGN_RIGHT_MID, 4, 0);
+        } else {
+            lv_obj_align(tail, LV_ALIGN_LEFT_MID, -4, 0);
+        }
+        lv_obj_clear_flag(tail, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_move_background(tail);
     }
 
-    // Create a full-width container for user messages to ensure right alignment
-    if (strcmp(role, "user") == 0) {
-        // Create a full-width container
-        lv_obj_t* container = lv_obj_create(content_);
-        lv_obj_set_width(container, LV_HOR_RES);
-        lv_obj_set_height(container, LV_SIZE_CONTENT);
-
-        // Make container transparent and borderless
-        lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(container, 0, 0);
-        lv_obj_set_style_pad_all(container, 0, 0);
-
-        // Move the message bubble into this container
-        lv_obj_set_parent(msg_bubble, container);
-
-        // Right align the bubble in the container
-        lv_obj_align(msg_bubble, LV_ALIGN_RIGHT_MID, -25, 0);
-
-        // Auto-scroll to this container
-        lv_obj_scroll_to_view_recursive(container, LV_ANIM_ON);
-    } else if (strcmp(role, "system") == 0) {
-        // Create full-width container for system messages to ensure center alignment
-        lv_obj_t* container = lv_obj_create(content_);
-        lv_obj_set_width(container, LV_HOR_RES);
-        lv_obj_set_height(container, LV_SIZE_CONTENT);
-
-        lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(container, 0, 0);
-        lv_obj_set_style_pad_all(container, 0, 0);
-
-        lv_obj_set_parent(msg_bubble, container);
-        lv_obj_align(msg_bubble, LV_ALIGN_CENTER, 0, 0);
-        lv_obj_scroll_to_view_recursive(container, LV_ANIM_ON);
-    } else {
-        // For assistant messages
-        // Left align assistant messages
-        lv_obj_align(msg_bubble, LV_ALIGN_LEFT_MID, 0, 0);
-
-        // Auto-scroll to the message bubble
-        lv_obj_scroll_to_view_recursive(msg_bubble, LV_ANIM_ON);
+    if (!is_system && is_user) {
+        make_avatar("我", 0x07C160);
     }
+
+    lv_obj_scroll_to_view_recursive(row, LV_ANIM_ON);
 
     // Store reference to the latest message label
     chat_message_label_ = msg_text;
