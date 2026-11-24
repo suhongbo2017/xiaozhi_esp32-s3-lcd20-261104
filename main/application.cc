@@ -5,6 +5,7 @@
 #include "board.h"
 #include "display.h"
 #include "mcp_server.h"
+#include "device/gpio_control.h"
 #include "market/stock_tools.h"
 #include "ui/standby_service.h"
 #include "ui/user_image.h"
@@ -162,6 +163,10 @@ void Application::Initialize() {
     /* 音乐模块：注册 self.music.* 工具（无硬件依赖） */
     MusicPlayer::GetInstance().Initialize();
     StockTools::Initialize();
+
+    /* 用户自定义 GPIO 开关（网页配置，语音可控制） */
+    GpioControl::GetInstance().Initialize();
+    GpioControl::GetInstance().RegisterMcpTools();
 
     /* 设备管理网页（8080）：主题/亮度/音量/灯/音乐服务地址
      * 注意：httpd_start 需要 lwIP 已初始化，必须等网络连上后再启动 */

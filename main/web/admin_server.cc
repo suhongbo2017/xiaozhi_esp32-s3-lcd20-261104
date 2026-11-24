@@ -2,6 +2,7 @@
 
 #include "audio_codec.h"
 #include "application.h"
+#include "device/gpio_control.h"
 #include "asset_ota.h"
 #include "ui/standby_service.h"
 #include "ui/user_image.h"
@@ -84,6 +85,7 @@ button.ghost{background:#1b3350;color:#cfe3f7}
   <button data-tab="look">外观</button>
   <button data-tab="sound">声音</button>
   <button data-tab="led">灯光</button>
+  <button data-tab="gpio">开关</button>
   <button data-tab="sys">系统</button>
 </div>
 
@@ -179,6 +181,30 @@ button.ghost{background:#1b3350;color:#cfe3f7}
   </div>
 </div>
 
+<!-- ============ 用户开关（GPIO） ============ -->
+<div class="pane" id="pane-gpio">
+  <div class="card">
+    <div class="row"><label><b>我的开关</b></label></div>
+    <div id="gpio_list" class="tip">加载中…</div>
+    <div class="tip">可以用语音控制，例如说「打开打印机灯光」</div>
+  </div>
+
+  <div class="card">
+    <div class="row"><label><b>新增 / 编辑</b></label></div>
+    <div class="row"><label>名称</label><input type="text" id="g_name" placeholder="打印机灯光"></div>
+    <div class="row"><label>GPIO 号</label><input type="text" id="g_pin" placeholder="12"></div>
+    <div class="row"><label>触发电平</label>
+      <select id="g_active"><option value="1">高电平点亮</option><option value="0">低电平点亮（继电器）</option></select>
+    </div>
+    <div class="row"><label>上电初始状态</label>
+      <select id="g_init"><option value="0">关闭</option><option value="1">打开</option></select>
+    </div>
+    <div class="tip warn" id="g_reserved"></div>
+    <button id="g_add">添加这一路</button>
+    <div class="tip" id="g_msg"></div>
+  </div>
+</div>
+
 <!-- ============ 系统 ============ -->
 <div class="pane" id="pane-sys">
   <div class="card">
@@ -244,6 +270,96 @@ async function load(){
   catch(e){ $('msg').textContent='读取失败：'+e; }
 }
 
+
+/* ---------------- 用户 GPIO 开关 ---------------- */
+let gpioDevices = [], gpioReserved = [];
+
+function renderGpio(){
+  const box = $('gpio_list');
+  if (!gpioDevices.length){ box.textContent = '还没有配置任何开关'; }
+  else {
+    box.innerHTML = '';
+    gpioDevices.forEach((d, i) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.padding = '8px 0';
+      row.style.borderBottom = '1px solid #1e3a58';
+      const label = document.createElement('label');
+      label.innerHTML = '<b>'+d.name+'</b><br><span class="tip">GPIO'+d.gpio
+        + (d.active_high?'':' · 低电平') + ' · '+(d.on?'开':'关')+'</span>';
+      const btns = document.createElement('div');
+      btns.style.display = 'flex'; btns.style.gap = '6px';
+      const mk = (txt, state, bg) => {
+        const b = document.createElement('button');
+        b.textContent = txt; b.style.margin = '0'; b.style.padding = '8px 12px';
+        b.style.width = 'auto'; b.style.background = bg;
+        b.onclick = () => gpioControl(d.name, state);
+        return b;
+      };
+      btns.appendChild(mk(d.on?'关':'开', d.on?'off':'on', d.on?'#ff7b7b':'#37e39b'));
+      btns.appendChild(mk('翻转', 'toggle', '#2b4d70'));
+      const del = document.createElement('button');
+      del.textContent = '删'; del.className = 'ghost';
+      del.style.margin='0'; del.style.padding='8px 12px'; del.style.width='auto';
+      del.onclick = () => removeGpio(i);
+      btns.appendChild(del);
+      row.appendChild(label); row.appendChild(btns);
+      box.appendChild(row);
+    });
+  }
+  const res = gpioReserved.length ? ('已占用（不能选）：' + gpioReserved.join(', ')) : '';
+  $('g_reserved').textContent = res + ' · 另外 0/19/20/26-37/43/44 也不能用';
+}
+
+async function loadGpio(){
+  try{
+    const r = await fetch('/api/gpio');
+    const j = await r.json();
+    gpioDevices = j.devices || [];
+    gpioReserved = j.reserved || [];
+    renderGpio();
+  }catch(e){ $('g_msg').textContent = '读取失败：'+e; }
+}
+
+async function gpioControl(name, state){
+  try{
+    const r = await fetch('/api/gpio',{method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: name, state: state})});
+    const j = await r.json();
+    $('g_msg').className = 'tip ' + (j.ok?'ok':'warn');
+    $('g_msg').textContent = j.message || (j.ok?'已执行':'失败');
+    loadGpio();
+  }catch(e){ $('g_msg').textContent = '失败：'+e; }
+}
+
+async function saveGpio(devices, msg){
+  try{
+    const r = await fetch('/api/gpio',{method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({devices: devices})});
+    const j = await r.json();
+    $('g_msg').className = 'tip ' + (j.ok?'ok':'warn');
+    $('g_msg').textContent = j.ok ? (msg||'已保存 ✓') : ('失败：'+(j.error||''));
+    if (j.ok) loadGpio();
+  }catch(e){ $('g_msg').textContent = '失败：'+e; }
+}
+
+$('g_add').onclick = () => {
+  const name = $('g_name').value.trim();
+  const pin = parseInt($('g_pin').value, 10);
+  if (!name){ $('g_msg').textContent='请填写名称'; $('g_msg').className='tip warn'; return; }
+  if (!(pin >= 0 && pin <= 48)){ $('g_msg').textContent='GPIO 号要填 0~48'; $('g_msg').className='tip warn'; return; }
+  const devices = gpioDevices.map(d => ({name:d.name, gpio:d.gpio, active_high:d.active_high, initial_on:d.initial_on}));
+  devices.push({name: name, gpio: pin, active_high: +$('g_active').value === 1, initial_on: +$('g_init').value === 1});
+  saveGpio(devices, '已添加 ✓（现在可以直接说「打开'+name+'」）');
+  $('g_name').value=''; $('g_pin').value='';
+};
+
+function removeGpio(idx){
+  const devices = gpioDevices.map(d => ({name:d.name, gpio:d.gpio, active_high:d.active_high, initial_on:d.initial_on}));
+  devices.splice(idx,1);
+  saveGpio(devices, '已删除 ✓');
+}
+
 /* ---------------- 分类卡片：tab 切换 ---------------- */
 document.querySelectorAll('.tabs button').forEach(btn=>{
   btn.onclick = () => {
@@ -251,6 +367,7 @@ document.querySelectorAll('.tabs button').forEach(btn=>{
     document.querySelectorAll('.pane').forEach(p=>p.classList.remove('on'));
     btn.classList.add('on');
     $('pane-'+btn.dataset.tab).classList.add('on');
+    if (btn.dataset.tab === 'gpio') loadGpio();
     window.scrollTo({top:0,behavior:'smooth'});
   };
 });
@@ -425,6 +542,7 @@ $('applyAssets').onclick = async () => {
   }catch(e){ $('amsg').textContent = '请求失败：'+e; }
 };
 load();
+loadGpio();
 </script></body></html>)HTML";
 
 const char* LedModeToString(int mode) {
@@ -688,6 +806,112 @@ esp_err_t HandleImagePost(httpd_req_t* req) {
     return ESP_OK;
 }
 
+
+/* ---------------- 用户自定义 GPIO 开关 ----------------
+ * GET  /api/gpio  -> {"devices":[{name,gpio,active_high,initial_on,on}], "reserved":[...]}
+ * POST /api/gpio  {"devices":[{name,gpio,active_high,initial_on}]}  保存配置
+ * POST /api/gpio  {"name":"打印机灯光","state":"on|off|toggle"}      即时控制
+ */
+esp_err_t HandleGpio(httpd_req_t* req) {
+    auto& gpio = GpioControl::GetInstance();
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->method == HTTP_GET) {
+        cJSON* root = cJSON_CreateObject();
+        cJSON* arr = cJSON_AddArrayToObject(root, "devices");
+        for (const auto& d : gpio.Devices()) {
+            cJSON* item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "name", d.name.c_str());
+            cJSON_AddNumberToObject(item, "gpio", d.gpio);
+            cJSON_AddBoolToObject(item, "active_high", d.active_high);
+            cJSON_AddBoolToObject(item, "initial_on", d.initial_on);
+            bool on = false;
+            gpio.GetState(d.name, &on);
+            cJSON_AddBoolToObject(item, "on", on);
+            cJSON_AddItemToArray(arr, item);
+        }
+        auto* reserved = cJSON_AddArrayToObject(root, "reserved");
+        for (int pin : Board::GetInstance().ReservedGpios()) {
+            cJSON_AddItemToArray(reserved, cJSON_CreateNumber(pin));
+        }
+        char* out = cJSON_PrintUnformatted(root);
+        httpd_resp_sendstr(req, out != nullptr ? out : "{}");
+        cJSON_free(out);
+        cJSON_Delete(root);
+        return ESP_OK;
+    }
+
+    char buf[1024];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"empty\"}");
+        return ESP_FAIL;
+    }
+    buf[len] = 0;
+    cJSON* root = cJSON_Parse(buf);
+    if (root == nullptr) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"bad json\"}");
+        return ESP_FAIL;
+    }
+
+    /* 即时控制：{"name":..,"state":..} */
+    auto* ctl_name = cJSON_GetObjectItem(root, "name");
+    auto* ctl_state = cJSON_GetObjectItem(root, "state");
+    if (cJSON_IsString(ctl_name) && cJSON_IsString(ctl_state)) {
+        std::string msg;
+        bool ok = gpio.SetByState(ctl_name->valuestring, ctl_state->valuestring, &msg);
+        cJSON_Delete(root);
+        cJSON* resp = cJSON_CreateObject();
+        cJSON_AddBoolToObject(resp, "ok", ok);
+        cJSON_AddStringToObject(resp, "message", msg.c_str());
+        char* out = cJSON_PrintUnformatted(resp);
+        httpd_resp_sendstr(req, out != nullptr ? out : "{\"ok\":false}");
+        cJSON_free(out);
+        cJSON_Delete(resp);
+        return ESP_OK;
+    }
+
+    /* 保存配置 */
+    auto* devices = cJSON_GetObjectItem(root, "devices");
+    std::vector<GpioSwitchConfig> cfgs;
+    if (cJSON_IsArray(devices)) {
+        const int n = cJSON_GetArraySize(devices);
+        for (int i = 0; i < n; i++) {
+            const cJSON* it = cJSON_GetArrayItem(devices, i);
+            const cJSON* name = cJSON_GetObjectItem(it, "name");
+            const cJSON* pin = cJSON_GetObjectItem(it, "gpio");
+            if (!cJSON_IsString(name) || !cJSON_IsNumber(pin)) {
+                continue;
+            }
+            if (name->valuestring[0] == 0) {
+                continue;
+            }
+            GpioSwitchConfig cfg;
+            cfg.name = name->valuestring;
+            cfg.gpio = pin->valueint;
+            const cJSON* ah = cJSON_GetObjectItem(it, "active_high");
+            const cJSON* io = cJSON_GetObjectItem(it, "initial_on");
+            cfg.active_high = cJSON_IsBool(ah) ? cJSON_IsTrue(ah) : true;
+            cfg.initial_on = cJSON_IsBool(io) ? cJSON_IsTrue(io) : false;
+            cfgs.push_back(cfg);
+        }
+    }
+    cJSON_Delete(root);
+
+    std::string error;
+    bool ok = gpio.Save(cfgs, &error);
+    cJSON* resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", ok);
+    if (!ok) {
+        cJSON_AddStringToObject(resp, "error", error.c_str());
+    }
+    char* out = cJSON_PrintUnformatted(resp);
+    httpd_resp_sendstr(req, out != nullptr ? out : "{\"ok\":false}");
+    cJSON_free(out);
+    cJSON_Delete(resp);
+    return ESP_OK;
+}
+
 esp_err_t HandleRoot(httpd_req_t* req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, kHtml, HTTPD_RESP_USE_STRLEN);
@@ -853,6 +1077,8 @@ bool AdminServer::Start() {
     httpd_uri_t uri_assets = {.uri = "/api/assets", .method = HTTP_POST, .handler = HandleAssetsApply, .user_ctx = nullptr};
     httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
     httpd_uri_t uri_chat_test = {.uri = "/api/chat_test", .method = HTTP_POST, .handler = HandleChatTest, .user_ctx = nullptr};
+    httpd_uri_t uri_gpio_get = {.uri = "/api/gpio", .method = HTTP_GET, .handler = HandleGpio, .user_ctx = nullptr};
+    httpd_uri_t uri_gpio_post = {.uri = "/api/gpio", .method = HTTP_POST, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_image_get = {.uri = "/api/image", .method = HTTP_GET, .handler = HandleImageGet, .user_ctx = nullptr};
     httpd_uri_t uri_image_post = {.uri = "/api/image", .method = HTTP_POST, .handler = HandleImagePost, .user_ctx = nullptr};
     httpd_register_uri_handler(g_server, &uri_root);
@@ -861,6 +1087,8 @@ bool AdminServer::Start() {
     httpd_register_uri_handler(g_server, &uri_assets);
     httpd_register_uri_handler(g_server, &uri_reboot);
     httpd_register_uri_handler(g_server, &uri_chat_test);
+    httpd_register_uri_handler(g_server, &uri_gpio_get);
+    httpd_register_uri_handler(g_server, &uri_gpio_post);
     httpd_register_uri_handler(g_server, &uri_image_get);
     httpd_register_uri_handler(g_server, &uri_image_post);
     ESP_LOGI(TAG, "admin web: http://<device-ip>:8080/");
