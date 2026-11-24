@@ -42,6 +42,9 @@ public:
     void OnOutput(std::function<void(std::vector<int16_t>&& data)> callback) override;
     void OnVadStateChange(std::function<void(bool speaking)> callback) override;
 
+    const std::vector<std::string>& GetWakeWords() const override { return wake_words_; }
+    bool SetWakeWordThreshold(float threshold) override;
+
     void EncodeWakeWordData() override;
     bool GetWakeWordOpus(std::vector<uint8_t>& opus) override;
     const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
@@ -77,6 +80,8 @@ private:
     // uses it to reject a fetch result produced before a disable/re-enable cycle.
     std::atomic<uint32_t> control_generation_{0};
     WakeDetector wake_detector_ = WakeDetector::kNone;
+    /* 待应用的阈值（ProcessingTask 里下发，避免和 fetch 打架） */
+    std::atomic<float> pending_threshold_{-1.0f};
 
     std::unique_ptr<CustomWakeWord> custom_wake_word_;
     std::vector<std::string> wake_words_;

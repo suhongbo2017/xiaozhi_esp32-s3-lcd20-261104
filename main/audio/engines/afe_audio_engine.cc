@@ -93,6 +93,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
     } else if (wakenet_model_name != nullptr) {
         wake_detector_ = WakeDetector::kWakeNet;
         auto words = esp_srmodel_get_wake_words(models_, wakenet_model_name);
+        ESP_LOGI(TAG, "wakenet model=%s words=%s", wakenet_model_name, words ? words : "(null)");
         if (words != nullptr) {
             std::stringstream stream(words);
             std::string word;
@@ -314,7 +315,28 @@ void AfeAudioEngine::UpdateAecState() {
     afe_control_dirty_ = true;
 }
 
+bool AfeAudioEngine::SetWakeWordThreshold(float threshold) {
+    if (afe_iface_ == nullptr || wake_detector_ != WakeDetector::kWakeNet) {
+        return false;
+    }
+    if (threshold < 0.4f) {
+        threshold = 0.4f;
+    }
+    if (threshold > 0.9999f) {
+        threshold = 0.9999f;
+    }
+    pending_threshold_.store(threshold);
+    afe_control_dirty_.store(true);
+    xEventGroupSetBits(event_group_, kAfeActive);
+    return true;
+}
+
 void AfeAudioEngine::ApplyAfeControls() {
+    const float th = pending_threshold_.exchange(-1.0f);
+    if (th > 0.0f && afe_iface_ != nullptr && afe_data_ != nullptr) {
+        afe_iface_->set_wakenet_threshold(afe_data_, 1, th);
+        ESP_LOGI(TAG, "wakenet threshold -> %.3f", th);
+    }
     EventBits_t bits = xEventGroupGetBits(event_group_);
     if (wake_detector_ == WakeDetector::kWakeNet) {
         if (bits & kWakeWordEnabled) {

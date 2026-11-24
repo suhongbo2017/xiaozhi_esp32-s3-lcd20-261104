@@ -1,6 +1,7 @@
 #include "admin_server.h"
 
 #include "audio_codec.h"
+#include "application.h"
 #include "asset_ota.h"
 #include "ui/standby_service.h"
 #include "ui/user_image.h"
@@ -150,6 +151,16 @@ button.ghost{background:#1b3350;color:#cfe3f7}
 <!-- ============ 声音 ============ -->
 <div class="pane" id="pane-sound">
   <div class="card">
+    <div class="row"><label><b>唤醒词</b> <span class="val" id="ww_name"></span></label>
+      <select id="wake_enabled"><option value="1">开启</option><option value="0">关闭</option></select>
+    </div>
+    <div class="row"><label>灵敏度 <span class="val" id="wtv">-</span></label></div>
+    <input type="range" id="wake_threshold" min="40" max="99" step="1">
+    <div class="tip">数值越小越容易唤醒（也更容易误唤醒）；0.40~0.99 生效</div>
+    <div class="tip warn" id="wake_warn" style="display:none">关闭唤醒词后，只能用 BOOT 键开始/结束说话</div>
+  </div>
+
+  <div class="card">
     <div class="row"><label>音量 <span class="val" id="vv">-</span></label></div>
     <input type="range" id="volume" min="0" max="100" step="1">
     <div class="row"><label>音乐播放时音量比例 <span class="val" id="dv">-</span>%</label></div>
@@ -221,6 +232,11 @@ function fill(s){
   $('standby').value = String(s.standby ?? 1);
   $('standby_city').value = s.standby_city || '上海';
   $('standby_symbols').value = s.standby_symbols || 'usIXIC,usINX,sh000001';
+  $('wake_enabled').value = String(s.wake_enabled ?? 1);
+  $('wake_threshold').value = s.wake_threshold ?? 50;
+  $('wtv').textContent = ((s.wake_threshold ?? 50)/100).toFixed(2);
+  $('ww_name').textContent = s.wake_words ? ('· ' + s.wake_words) : '';
+  $('wake_warn').style.display = (s.wake_enabled ?? 1) ? 'none' : 'block';
   $('status').textContent = JSON.stringify(s, null, 1);
 }
 async function load(){
@@ -352,6 +368,12 @@ async function clearImage(kind){
   previewImage(kind);
 });
 
+$('wake_threshold').addEventListener('input', e=>{
+  $('wtv').textContent = ((+e.target.value)/100).toFixed(2);
+});
+$('wake_enabled').addEventListener('change', e=>{
+  $('wake_warn').style.display = (+e.target.value) ? 'none' : 'block';
+});
 ['brightness','volume','duck'].forEach(id=>{
   $(id).addEventListener('input',()=>{ $(id[0]+'v').textContent = $(id).value; });
 });
@@ -367,7 +389,9 @@ $('save').onclick = async () => {
     api: $('api').value.trim(),
     standby: +$('standby').value,
     standby_city: $('standby_city').value.trim(),
-    standby_symbols: $('standby_symbols').value.trim()
+    standby_symbols: $('standby_symbols').value.trim(),
+    wake_enabled: +$('wake_enabled').value,
+    wake_threshold: +$('wake_threshold').value
   };
   try{
     const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -459,6 +483,18 @@ std::string BuildStatusJson() {
                                                      led_settings.GetInt("status_enabled", 1)
                                                          ? "on" : "off").c_str());
     cJSON_AddStringToObject(root, "led_color", "#00b3ff");
+    auto& app = Application::GetInstance();
+    cJSON_AddNumberToObject(root, "wake_enabled", app.WakeWordEnabled() ? 1 : 0);
+    cJSON_AddNumberToObject(root, "wake_threshold", (int)(app.WakeWordThreshold() * 100 + 0.5f));
+    std::string wake_words;
+    for (auto& w : app.GetWakeWords()) {
+        if (!wake_words.empty()) {
+            wake_words += " / ";
+        }
+        wake_words += w;
+    }
+    cJSON_AddStringToObject(root, "wake_words", wake_words.c_str());
+
     auto& standby = StandbyService::GetInstance();
     cJSON_AddNumberToObject(root, "standby", standby.enabled() ? 1 : 0);
     cJSON_AddStringToObject(root, "standby_city", standby.city().c_str());
@@ -728,6 +764,20 @@ esp_err_t HandleSettings(httpd_req_t* req) {
     }
 
     auto* led_mode = cJSON_GetObjectItem(root, "led_mode");
+    auto* wake_enabled = cJSON_GetObjectItem(root, "wake_enabled");
+    auto* wake_threshold = cJSON_GetObjectItem(root, "wake_threshold");
+    if (cJSON_IsNumber(wake_enabled) || cJSON_IsNumber(wake_threshold)) {
+        auto& app = Application::GetInstance();
+        if (cJSON_IsNumber(wake_threshold)) {
+            app.SetWakeWordThreshold(wake_threshold->valueint / 100.0f);
+        }
+        if (cJSON_IsNumber(wake_enabled)) {
+            app.SetWakeWordEnabled(wake_enabled->valueint != 0);
+        }
+        ESP_LOGI(TAG, "wake -> %d threshold=%d", (int)app.WakeWordEnabled(),
+                 (int)(app.WakeWordThreshold() * 100 + 0.5f));
+    }
+
     auto* standby = cJSON_GetObjectItem(root, "standby");
     auto* standby_city = cJSON_GetObjectItem(root, "standby_city");
     auto* standby_symbols = cJSON_GetObjectItem(root, "standby_symbols");

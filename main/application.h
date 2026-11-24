@@ -70,6 +70,13 @@ public:
     void Run();
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
+
+    /* 唤醒词配置（网页可改，NVS 持久化） */
+    bool WakeWordEnabled() const { return wake_word_enabled_; }
+    void SetWakeWordEnabled(bool enabled);
+    float WakeWordThreshold() const { return wake_word_threshold_; }
+    bool SetWakeWordThreshold(float threshold);
+    std::vector<std::string> GetWakeWords();
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     
     /**
@@ -149,6 +156,10 @@ private:
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;
+
+    /* 唤醒词：默认启用，阈值默认 0.5（NVS 里 wake/enabled、wake/threshold） */
+    bool wake_word_enabled_ = true;
+    float wake_word_threshold_ = 0.5f;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;

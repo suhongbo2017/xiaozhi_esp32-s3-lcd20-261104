@@ -493,16 +493,10 @@ void LcdDisplay::SetupUI() {
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
 
-    emoji_image_ = lv_img_create(screen);
-    lv_obj_align(emoji_image_, LV_ALIGN_TOP_MID, 0,
-                 text_font->line_height + lvgl_theme->spacing(8));
-
-    // Display AI logo while booting
-    emoji_label_ = lv_label_create(screen);
-    lv_obj_center(emoji_label_);
-    lv_obj_set_style_text_font(emoji_label_, large_icon_font, 0);
-    lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
-    lv_label_set_text(emoji_label_, MATERIAL_SYMBOLS_ROBOT_2);
+    /* 微信气泡模式：头像已由每条消息自带，不再画居中的 AI 机器人图标和表情图 */
+    emoji_image_ = nullptr;
+    emoji_label_ = nullptr;
+    (void)large_icon_font;
 }
 #if CONFIG_IDF_TARGET_ESP32P4
 #define MAX_MESSAGES 40
@@ -567,8 +561,8 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
                 }
             }
         }
-    } else {
-        // Hide the centered AI logo
+    } else if (emoji_label_ != nullptr) {
+        // Hide the centered AI logo（微信模式没有，判空保护）
         lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -1114,12 +1108,7 @@ void LcdDisplay::SetEmotion(const char* emotion) {
                  emotion);
     }
     if (emoji_image_ == nullptr) {
-        if (setup_ui_called_) {
-            ESP_LOGW(TAG,
-                     "SetEmotion('%s') failed: emoji_image_ is nullptr (SetupUI() was called but "
-                     "emoji image not created)",
-                     emotion);
-        }
+        /* 微信气泡模式刻意不显示表情图：这里静默返回（application 每次状态切换都会调用） */
         return;
     }
 
@@ -1243,7 +1232,9 @@ void LcdDisplay::SetTheme(Theme* theme) {
     lv_obj_set_style_text_color(notification_label_, lvgl_theme->text_color(), 0);
     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
     lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
-    lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
+    if (emoji_label_ != nullptr) {
+        lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
+    }
 
     // If we have the chat message style, update all message bubbles
 #if CONFIG_USE_WECHAT_MESSAGE_STYLE
@@ -1323,7 +1314,9 @@ void LcdDisplay::SetTheme(Theme* theme) {
     }
 
     if (emoji_label_ != nullptr) {
+        if (emoji_label_ != nullptr) {
         lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
+    }
     }
 
     // Update bottom bar background color with 50% opacity

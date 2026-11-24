@@ -32,6 +32,17 @@ public:
     virtual void OnOutput(std::function<void(std::vector<int16_t>&& data)> callback) = 0;
     virtual void OnVadStateChange(std::function<void(bool speaking)> callback) = 0;
 
+    /** 当前模型支持的唤醒词（只读展示用；改词需要换模型） */
+    virtual const std::vector<std::string>& GetWakeWords() const {
+        static const std::vector<std::string> kEmpty;
+        return kEmpty;
+    }
+    /** 唤醒词检测阈值 0.4~0.9999；不支持时返回 false */
+    virtual bool SetWakeWordThreshold(float threshold) {
+        (void)threshold;
+        return false;
+    }
+
     virtual void EncodeWakeWordData() = 0;
     virtual bool GetWakeWordOpus(std::vector<uint8_t>& opus) = 0;
     virtual const std::string& GetLastDetectedWakeWord() const = 0;

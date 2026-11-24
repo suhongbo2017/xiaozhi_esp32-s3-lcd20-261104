@@ -657,6 +657,28 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
     return nullptr;
 }
 
+std::vector<std::string> AudioService::GetWakeWords() const {
+    if (audio_engine_) {
+        auto words = audio_engine_->GetWakeWords();
+        if (!words.empty()) {
+            return words;
+        }
+        const auto& last = audio_engine_->GetLastDetectedWakeWord();
+        if (!last.empty()) {
+            words.push_back(last);
+            return words;
+        }
+    }
+    return {};
+}
+
+bool AudioService::SetWakeWordThreshold(float threshold) {
+    if (audio_engine_) {
+        return audio_engine_->SetWakeWordThreshold(threshold);
+    }
+    return false;
+}
+
 void AudioService::EnableWakeWordDetection(bool enable) {
     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
     if (enable) {

@@ -127,6 +127,10 @@ public:
     bool IsAfeWakeWord();
 
     void EnableWakeWordDetection(bool enable);
+    /** 唤醒词列表（模型决定，只读展示） */
+    std::vector<std::string> GetWakeWords() const;
+    /** 唤醒词检测阈值 0.4~0.9999（AfeAudioEngine 支持时才生效） */
+    bool SetWakeWordThreshold(float threshold);
     void ReleaseWakeWordResources();
     void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
