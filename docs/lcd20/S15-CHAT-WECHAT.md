@@ -31,6 +31,25 @@
 
 聊天区底色同步改成微信的浅灰 `#EDEDED`（深色 `#111111`），气泡对比更明显。
 
+## 关键前提：必须打开 `CONFIG_USE_WECHAT_MESSAGE_STYLE`
+
+`lcd_display.cc` 里 **有两套 `SetChatMessage()` 实现**，由 Kconfig 选择：
+
+```
+#if CONFIG_USE_WECHAT_MESSAGE_STYLE      // 微信风格分支（line ~357 SetupUI / ~512 SetChatMessage）
+   ...
+#else                                     // 默认分支（line ~1054 SetChatMessage）
+   ...
+#endif
+```
+
+这块板子原来用的是默认分支，所以只改代码不生效（真机上"还是旧样式"就是这个原因，
+一开始连日志都不打印）。现在在 `main/boards/esp32s3-lcd20/config.json` 里加了：
+
+```json
+"sdkconfig_append": [ "CONFIG_USE_WECHAT_MESSAGE_STYLE=y", ... ]
+```
+
 ## 实现
 
 `LcdDisplay::SetChatMessage()` 里每个消息现在是一个**行容器**（row）：
@@ -65,9 +84,18 @@ content_（flex column, 可滚动）
 ## 实测
 
 ```
-POST /api/chat_test -> {"ok":true}      串口无 LVGL 断言/警告
-构建通过，固件 3.0MB / 3.94MB（76%）
+POST /api/chat_test -> {"ok":true}
+LcdDisplay: bubble[system]:    row=224x38  bubble=197x38  text=181px (max 208)
+LcdDisplay: bubble[system]:    row=224x72  bubble=224x72  text=208px (max 208)   ← 长文本换行
+LcdDisplay: bubble[user]:      row=224x103 bubble=186x103 text=170px (max 170)   ← 186+6+26=218 ≤ 224
+LcdDisplay: bubble[assistant]: row=224x165 bubble=186x165 text=170px (max 170)
+LcdDisplay: bubble[user]:      row=224x41  bubble=96x41   text=80px             ← 短句自适应
 ```
+
+调试日志已降级成 `ESP_LOGD`（默认不打印）。
+
+踩坑记录：一开始忘了给气泡设 `LV_SIZE_CONTENT`，LVGL 用默认尺寸，
+日志显示 `bubble=130x130`（所有气泡都变成方块），补上宽高自适应后才正常。
 
 ## 限制
 

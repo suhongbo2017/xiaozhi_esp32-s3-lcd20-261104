@@ -591,9 +591,14 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
 
     constexpr int kAvatarSize = 26;
     constexpr int kAvatarGap = 6;
+    constexpr int kBubblePadH = 8;
+    constexpr int kBubblePadV = 5;
+    constexpr int kTailExtra = 6;    /* 小尾巴露在气泡外的部分 */
     const lv_coord_t row_w = LV_HOR_RES - 2 * lvgl_theme->spacing(4);
-    const lv_coord_t max_bubble_w =
-        row_w - (is_system ? 0 : kAvatarSize + kAvatarGap) - 10;
+    /* 文本可用宽度 = 行宽 - 头像 - 左右内边距 - 尾巴（气泡本身是内容自适应） */
+    const lv_coord_t max_text_w =
+        row_w - (is_system ? 0 : kAvatarSize + kAvatarGap) - 2 * kBubblePadH -
+        (is_system ? 0 : kTailExtra);
 
     /* ---- 一行容器 ---- */
     lv_obj_t* row = lv_obj_create(content_);
@@ -612,6 +617,8 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_t* av = lv_obj_create(row);
         lv_obj_remove_style_all(av);
         lv_obj_set_size(av, kAvatarSize, kAvatarSize);
+        lv_obj_set_style_min_width(av, kAvatarSize, 0);
+        lv_obj_set_style_min_height(av, kAvatarSize, 0);
         lv_obj_set_style_radius(av, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(av, lv_color_hex(bg), 0);
         lv_obj_set_style_bg_opa(av, LV_OPA_COVER, 0);
@@ -635,8 +642,12 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_obj_set_scrollbar_mode(msg_bubble, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_border_width(msg_bubble, 0, 0);
     lv_obj_set_style_pad_all(msg_bubble, lvgl_theme->spacing(4), 0);
-    lv_obj_set_style_pad_hor(msg_bubble, 8, 0);
-    lv_obj_set_style_pad_ver(msg_bubble, 5, 0);
+    lv_obj_set_style_pad_hor(msg_bubble, kBubblePadH, 0);
+    lv_obj_set_style_pad_ver(msg_bubble, kBubblePadV, 0);
+    /* 尺寸跟内容走（不设会吃到默认尺寸，气泡会变成方块） */
+    lv_obj_set_width(msg_bubble, LV_SIZE_CONTENT);
+    lv_obj_set_height(msg_bubble, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_width(msg_bubble, 0, 0);
     lv_obj_set_style_bg_opa(msg_bubble, LV_OPA_COVER, 0);
     lv_obj_clear_flag(msg_bubble, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_user_data(msg_bubble, (void*)role_tag);
@@ -670,8 +681,8 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     if (text_width < 20) {
         text_width = 20;
     }
-    if (text_width > max_bubble_w) {
-        text_width = max_bubble_w;
+    if (text_width > max_text_w) {
+        text_width = max_text_w;
     }
     lv_obj_set_width(msg_text, text_width);
     lv_label_set_long_mode(msg_text, LV_LABEL_LONG_WRAP);
@@ -699,6 +710,11 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         make_avatar("我", 0x07C160);
     }
 
+    lv_obj_update_layout(row);
+    ESP_LOGD(TAG, "bubble[%s]: row=%ldx%ld bubble=%ldx%ld text=%ldpx (max %ld)", role_tag,
+             (long)lv_obj_get_width(row), (long)lv_obj_get_height(row),
+             (long)lv_obj_get_width(msg_bubble), (long)lv_obj_get_height(msg_bubble),
+             (long)text_width, (long)max_text_w);
     lv_obj_scroll_to_view_recursive(row, LV_ANIM_ON);
 
     // Store reference to the latest message label
