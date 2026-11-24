@@ -60,14 +60,18 @@ public:
     void SetStocks(const std::vector<StockItem>& stocks);
     void SetHint(const char* hint);
 
+    /** 背景图（RGB565，已解码）：传 nullptr 恢复渐变底色 */
+    void SetBackground(const lv_image_dsc_t* dsc);
+
 private:
     Display* display_ = nullptr;
     bool shown_ = false;
 #ifdef HAVE_LVGL
     lv_obj_t* root_ = nullptr;
+    lv_obj_t* bg_image_ = nullptr;
+    lv_obj_t* bg_dim_ = nullptr;
     lv_obj_t* clock_label_ = nullptr;
     lv_obj_t* date_label_ = nullptr;
-    lv_obj_t* weather_icon_ = nullptr;
     lv_obj_t* weather_label_ = nullptr;
     lv_obj_t* stock_name_[3] = {nullptr, nullptr, nullptr};
     lv_obj_t* stock_price_[3] = {nullptr, nullptr, nullptr};

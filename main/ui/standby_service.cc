@@ -1,6 +1,9 @@
 #include "standby_service.h"
 
 #include "standby_page.h"
+#include "user_image.h"
+
+#include "lvgl_theme.h"
 
 #include "music/music_api_client.h"
 #include "music/music_player.h"
@@ -25,6 +28,10 @@ constexpr uint32_t kFetchIntervalS = 300;   /* 天气/行情刷新间隔（服�
 constexpr const char* kWeekday[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
 
 std::unique_ptr<StandbyPage> g_page;
+#ifdef HAVE_LVGL
+lv_image_dsc_t g_bg_dsc = {};
+bool g_bg_ready = false;
+#endif
 uint32_t g_last_fetch_s = 0;
 
 std::string FormatDate(const struct tm& t) {
@@ -61,6 +68,23 @@ void StandbyService::Initialize(Display* display) {
     g_page = std::make_unique<StandbyPage>(display);
     dirty_ = true;
     started_ = true;
+    /* 诊断：待机页用的中文字体是否覆盖我们需要的中文字（月/日/纳/标/上） */
+#ifdef HAVE_LVGL
+    if (auto theme = dynamic_cast<LvglTheme*>(display->GetTheme())) {
+        if (theme->text_font() && theme->text_font()->font() != nullptr) {
+            const lv_font_t* f = theme->text_font()->font();
+            const uint32_t probe[] = {0x6708 /*月*/, 0x65E5 /*日*/, 0x7EB3 /*纳*/, 0x6807 /*标*/, 0x4E0A /*上*/};
+            int ok = 0;
+            for (uint32_t cp : probe) {
+                lv_font_glyph_dsc_t dsc = {};
+                if (lv_font_get_glyph_dsc(f, &dsc, cp, 0)) {
+                    ok++;
+                }
+            }
+            ESP_LOGI(TAG, "text font: line_h=%d glyphs=%d/5 (月日纳标上)", (int)f->line_height, ok);
+        }
+    }
+#endif
     xTaskCreate(TaskEntry, "standby", 6144, this, 3, nullptr);
     ESP_LOGI(TAG, "standby service started (enabled=%d city=%s symbols=%s)", (int)enabled_.load(),
              city_.c_str(), symbols_.c_str());
@@ -75,6 +99,33 @@ void StandbyService::SetIdle(bool idle) {
     if (idle_.exchange(idle) != idle) {
         dirty_ = true;
     }
+}
+
+void StandbyService::ReloadBackground() {
+    if (!g_page) {
+        return;
+    }
+#ifdef HAVE_LVGL
+    uint8_t* rgb = nullptr;
+    size_t len = 0;
+    uint32_t w = 0, h = 0;
+    if (UserImage::GetInstance().Decoded(UserImage::kBackground, &rgb, &len, &w, &h)) {
+        g_bg_dsc = {};
+        g_bg_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+        g_bg_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+        g_bg_dsc.header.w = w;
+        g_bg_dsc.header.h = h;
+        g_bg_dsc.data_size = len;
+        g_bg_dsc.data = rgb;
+        g_page->SetBackground(&g_bg_dsc);
+        g_bg_ready = true;
+        ESP_LOGI(TAG, "standby background image applied (%ux%u)", (unsigned)w, (unsigned)h);
+    } else if (g_bg_ready) {
+        g_bg_ready = false;
+        g_page->SetBackground(nullptr);
+        ESP_LOGI(TAG, "standby background image removed");
+    }
+#endif
 }
 
 void StandbyService::ReloadConfig() {
@@ -141,6 +192,7 @@ void StandbyService::Tick() {
                 if (!last_stocks_.empty()) {
                     g_page->SetStocks(last_stocks_);
                 }
+                ReloadBackground();
                 if (g_last_fetch_s == 0) {
                     dirty_ = true;
                 }
@@ -157,10 +209,14 @@ void StandbyService::Tick() {
                 struct tm tm_now = {};
                 localtime_r(&t, &tm_now);
                 char hhmm[16];
+                /* 注意：日期串必须自己持有，取临时 std::string 的 c_str() 会变悬空指针
+                 * （真机表现为“？？周二”这种乱码） */
+                std::string date_holder;
                 const char* date_line = "校时中…";
                 if (tm_now.tm_year >= 2025 - 1900) {
                     snprintf(hhmm, sizeof(hhmm), "%02d:%02d", tm_now.tm_hour, tm_now.tm_min);
-                    date_line = FormatDate(tm_now).c_str();
+                    date_holder = FormatDate(tm_now);
+                    date_line = date_holder.c_str();
                 } else {
                     snprintf(hhmm, sizeof(hhmm), "--:--");
                 }

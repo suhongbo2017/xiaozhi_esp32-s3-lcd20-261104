@@ -95,7 +95,12 @@ void ApplyIfPending() {
         return;
     }
 
-    esp_err_t err = esp_partition_erase_range(assets, 0, assets->size);
+    /* 只擦 assets.bin 实际占用（4KB 对齐），保留分区尾部 1MB 用户图片区 */
+    size_t erase_len = (static_cast<size_t>(hdr.length) + 0xFFF) & ~static_cast<size_t>(0xFFF);
+    if (erase_len > assets->size) {
+        erase_len = assets->size;
+    }
+    esp_err_t err = esp_partition_erase_range(assets, 0, erase_len);
     if (err == ESP_OK) {
         err = esp_partition_write(assets, 0, buf, hdr.length);
     }

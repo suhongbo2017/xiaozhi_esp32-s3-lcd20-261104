@@ -7,6 +7,7 @@
 #include "mcp_server.h"
 #include "market/stock_tools.h"
 #include "ui/standby_service.h"
+#include "ui/user_image.h"
 #include "web/admin_server.h"
 #include "music/music_player.h"
 #include "mqtt_protocol.h"
@@ -76,6 +77,11 @@ void Application::Initialize() {
     // Setup the display
     auto display = board.GetDisplay();
     display->SetupUI();
+    /* 用户图片：初始化（assets 分区尾部 1MB） */
+    UserImage::GetInstance().Init();
+    /* 开机图：显示 2 秒后自动移除（没有设置过就什么都不做） */
+    UserImage::GetInstance().ShowBootSplash(display, 2);
+
     /* 待机页（时钟/日期/天气/指数）：空闲时显示 */
     StandbyService::GetInstance().Initialize(display);
     // Print board name/version info

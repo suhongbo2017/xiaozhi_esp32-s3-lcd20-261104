@@ -17,6 +17,7 @@ void StandbyPage::SetClock(const char*, const char*) {}
 void StandbyPage::SetWeather(const Weather&) {}
 void StandbyPage::SetStocks(const std::vector<StockItem>&) {}
 void StandbyPage::SetHint(const char*) {}
+void StandbyPage::SetBackground(const lv_image_dsc_t*) {}
 
 #else /* HAVE_LVGL */
 
@@ -28,7 +29,7 @@ namespace {
 
 /* ---------------- 版式（240x320） ----------------
  * 顶部：大时钟（48px 数字）+ 日期
- * 中部：天气（图标 + 温度 + 描述）
+ * 中部：天气（温度 + 描述，整行居中）
  * 下部：最多 3 行指数/个股
  * 底部：提示文字
  */
@@ -63,51 +64,9 @@ const lv_font_t* TextFont(Display* display) {
     return nullptr;
 }
 
-/* emoji 字体：天气图标用（text_font 只含中英文字形，emoji 在独立字体里） */
-const lv_font_t* EmojiFont(Display* display) {
-    auto theme = dynamic_cast<LvglTheme*>(display->GetTheme());
-    if (theme && theme->emoji_font()) {
-        return theme->emoji_font()->font();
-    }
-    return nullptr;
-}
-
-const lv_font_t* IconFont(Display* display) {
-    auto theme = dynamic_cast<LvglTheme*>(display->GetTheme());
-    if (theme && theme->large_icon_font()) {
-        return theme->large_icon_font()->font();
-    }
-    if (theme && theme->icon_font()) {
-        return theme->icon_font()->font();
-    }
-    return nullptr;
-}
-
 void SetFont(lv_obj_t* obj, const lv_font_t* font) {
     if (font != nullptr) {
         lv_obj_set_style_text_font(obj, font, 0);
-    }
-}
-
-/* 天气图标：用 emoji 字体（Noto Color Emoji，assets 里已有） */
-const char* WeatherEmoji(int icon) {
-    switch (icon) {
-        case 0:
-            return "\xF0\x9F\x8C\x9E";  /* 🌞 */
-        case 1:
-            return "\xE2\x9B\x85";      /* ⛅ */
-        case 2:
-            return "\xE2\x98\x81";      /* ☁ */
-        case 3:
-            return "\xF0\x9F\x8C\xA7";  /* 🌧 */
-        case 4:
-            return "\xE2\x9D\x84";      /* ❄ */
-        case 5:
-            return "\xE2\x9A\xA1";      /* ⚡ */
-        case 6:
-            return "\xF0\x9F\x8C\xAB";  /* 🌫 */
-        default:
-            return "\xE2\x98\x81";
     }
 }
 
@@ -166,16 +125,12 @@ void StandbyPage::CreateIfNeeded() {
     lv_obj_set_style_bg_color(divider, lv_color_hex(kLine), 0);
     lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
 
-    /* 天气：emoji 图标 + 温度 + 描述 */
-    const lv_font_t* emoji = EmojiFont(display_);
-    weather_icon_ = CreateLabel(root_, emoji != nullptr ? emoji : TextFont(display_), 0xFFFFFF);
-    lv_obj_set_pos(weather_icon_, kPad + 4, kWeatherY);
-    lv_label_set_text(weather_icon_, "");
-
+    /* 天气：整行居中（图标字体缺字会显示方块，这里只用文字，居中靠 text_align） */
     weather_label_ = CreateLabel(root_, TextFont(display_), 0xFFFFFF);
-    lv_obj_set_pos(weather_label_, kPad + 44, kWeatherY + 2);
-    lv_obj_set_width(weather_label_, w - kPad * 2 - 48);
-    lv_label_set_long_mode(weather_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(weather_label_, 0, kWeatherY);
+    lv_obj_set_width(weather_label_, w);
+    lv_obj_set_style_text_align(weather_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(weather_label_, LV_LABEL_LONG_CLIP);
     lv_label_set_text(weather_label_, "天气加载中…");
 
     /* 指数/个股：名称 + 价格/涨跌幅 */
@@ -210,13 +165,14 @@ void StandbyPage::CreateIfNeeded() {
 
 void StandbyPage::Destroy() {
     shown_ = false;
+    bg_image_ = nullptr;
+    bg_dim_ = nullptr;
     if (root_ != nullptr) {
         lv_obj_delete(root_);
         root_ = nullptr;
     }
     clock_label_ = nullptr;
     date_label_ = nullptr;
-    weather_icon_ = nullptr;
     weather_label_ = nullptr;
     hint_label_ = nullptr;
     for (int i = 0; i < 3; i++) {
@@ -269,10 +225,7 @@ void StandbyPage::SetWeather(const Weather& weather) {
     DisplayLockGuard lock(display_);
     if (!weather.valid) {
         if (weather_label_ != nullptr) {
-            lv_label_set_text(weather_label_, "天气不可用");
-        }
-        if (weather_icon_ != nullptr) {
-            lv_label_set_text(weather_icon_, "");
+            lv_label_set_text(weather_label_, "天气暂无数据");
         }
         return;
     }
@@ -285,9 +238,6 @@ void StandbyPage::SetWeather(const Weather& weather) {
             snprintf(buf, sizeof(buf), "%s  %.0f°C", weather.text.c_str(), weather.temp);
         }
         lv_label_set_text(weather_label_, buf);
-    }
-    if (weather_icon_ != nullptr) {
-        lv_label_set_text(weather_icon_, WeatherEmoji(weather.icon));
     }
 }
 
@@ -329,6 +279,44 @@ void StandbyPage::SetStocks(const std::vector<StockItem>& stocks) {
         const uint32_t pcolor = s.change_pct > 0.0001f ? kUp : (s.change_pct < -0.0001f ? kDown : kFlat);
         lv_obj_set_style_text_color(stock_price_[i], lv_color_hex(pcolor), 0);
     }
+}
+
+void StandbyPage::SetBackground(const lv_image_dsc_t* dsc) {
+    if (display_ == nullptr || root_ == nullptr ) {
+        return;
+    }
+    DisplayLockGuard lock(display_);
+    if (dsc == nullptr) {
+        if (bg_dim_ != nullptr) {
+            lv_obj_delete(bg_dim_);
+            bg_dim_ = nullptr;
+        }
+        if (bg_image_ != nullptr) {
+            lv_obj_delete(bg_image_);
+            bg_image_ = nullptr;
+        }
+        return;
+    }
+    if (bg_image_ == nullptr) {
+        bg_image_ = lv_image_create(root_);
+        lv_obj_remove_style_all(bg_image_);
+        lv_obj_set_size(bg_image_, display_->width(), display_->height());
+    }
+    if (bg_dim_ == nullptr) {
+        /* 半透明黑遮罩：图片上压白字要看得清 */
+        bg_dim_ = lv_obj_create(root_);
+        lv_obj_remove_style_all(bg_dim_);
+        lv_obj_set_size(bg_dim_, display_->width(), display_->height());
+        lv_obj_set_style_bg_color(bg_dim_, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(bg_dim_, 110, 0);   /* 0~255，约 43% */
+        lv_obj_clear_flag(bg_dim_, LV_OBJ_FLAG_SCROLLABLE);
+    }
+    lv_image_set_src(bg_image_, dsc);
+    lv_obj_set_pos(bg_image_, 0, 0);
+    lv_obj_set_pos(bg_dim_, 0, 0);
+    /* 顺序：图片(最底) -> 遮罩 -> 文字 */
+    lv_obj_move_background(bg_dim_);
+    lv_obj_move_background(bg_image_);
 }
 
 void StandbyPage::SetHint(const char* hint) {

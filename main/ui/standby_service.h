@@ -34,6 +34,9 @@ public:
     /** 网页改配置后调用：重载 NVS 并立即刷一次 */
     void ReloadConfig();
 
+    /** 网页上传/清除背景图后调用：重新解码并刷新待机页背景 */
+    void ReloadBackground();
+
     /* ---- 配置读写（供 AdminServer 用） ---- */
     bool enabled() const { return enabled_.load(); }
     void SetEnabled(bool enabled);

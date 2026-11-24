@@ -3,6 +3,7 @@
 #include "audio_codec.h"
 #include "asset_ota.h"
 #include "ui/standby_service.h"
+#include "ui/user_image.h"
 #include "board.h"
 #include "display.h"
 #include "display/lvgl_display/lvgl_theme.h"
@@ -54,65 +55,129 @@ button:active{transform:scale(.99)}
 .tip{color:#8fa6bf;font-size:12px;margin-top:6px}
 .val{color:#00e5ff;font-variant-numeric:tabular-nums}
 pre{background:#0b1a2a;border-radius:10px;padding:10px;font-size:12px;overflow:auto;max-height:150px}
+.tabs{display:flex;gap:6px;background:#0b1a2a;border:1px solid #1e3a58;border-radius:12px;padding:5px;margin:0 0 6px;position:sticky;top:0;z-index:9}
+.tabs button{flex:1;margin:0;padding:9px 4px;background:transparent;color:#9fb6cf;font-size:13px;font-weight:600;border-radius:9px}
+.tabs button.on{background:#00a2ff;color:#04121f}
+.pane{display:none}.pane.on{display:block}
+.imgbox{width:100%;aspect-ratio:3/4;background:#0b1a2a;border:1px dashed #2b4d70;border-radius:12px;
+ display:flex;align-items:center;justify-content:center;overflow:hidden;margin:10px 0;color:#5c7490;font-size:13px}
+.imgbox img{width:100%;height:100%;object-fit:cover}
+.btnrow{display:flex;gap:8px}
+.btnrow button{flex:1}
+button.ghost{background:#1b3350;color:#cfe3f7}}
+</style>
 </style></head><body><div class="wrap">
 <h1>小智设备管理</h1>
 <div class="sub" id="dev">连接中…</div>
 
-<div class="card">
-  <div class="row"><label>主题</label>
-    <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select>
-  </div>
-  <div class="row"><label>屏幕亮度 <span class="val" id="bv">-</span></label></div>
-  <input type="range" id="brightness" min="0" max="100" step="1">
-  <div class="row"><label>音量 <span class="val" id="vv">-</span></label></div>
-  <input type="range" id="volume" min="0" max="100" step="1">
-  <div class="row"><label>音乐播放时音量比例 <span class="val" id="dv">-</span>%</label></div>
-  <input type="range" id="duck" min="30" max="100" step="5">
-  <div class="tip">播放音乐时自动压低音量，方便用唤醒词打断</div>
+<div class="tabs">
+  <button data-tab="display" class="on">显示</button>
+  <button data-tab="look">外观</button>
+  <button data-tab="sound">声音</button>
+  <button data-tab="led">灯光</button>
+  <button data-tab="sys">系统</button>
 </div>
 
-<div class="card">
-  <div class="row"><label>状态灯</label>
-    <select id="led_mode"><option value="on">跟随状态</option><option value="off">常灭</option><option value="color">固定颜色</option></select>
+<!-- ============ 显示 ============ -->
+<div class="pane on" id="pane-display">
+  <div class="card">
+    <div class="row"><label>主题</label>
+      <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select>
+    </div>
+    <div class="row"><label>屏幕亮度 <span class="val" id="bv">-</span></label></div>
+    <input type="range" id="brightness" min="0" max="100" step="1">
   </div>
-  <div class="row"><label>固定颜色</label><input type="color" id="led_color" value="#00b3ff"></div>
-  <div class="tip">唤醒词开关需要改音频生命周期，留到 P2</div>
+
+  <div class="card">
+    <div class="row"><label><b>待机页</b>（时钟 / 天气 / 指数）</label>
+      <select id="standby"><option value="1">开启</option><option value="0">关闭</option></select>
+    </div>
+    <div class="row"><label>城市</label><input type="text" id="standby_city" placeholder="上海"></div>
+    <div class="row"><label>指数 / 个股</label></div>
+    <input type="text" id="standby_symbols" placeholder="usIXIC,usINX,sh000001">
+    <div class="tip">默认 纳指 / 标普 / 上证；也支持 sh600519、hk00700、usNVDA，逗号分隔最多 4 个</div>
+  </div>
+
+  <div class="card">
+    <div class="row"><label><b>待机背景图</b></label></div>
+    <div class="imgbox" id="bg_box">未设置（使用深色渐变）</div>
+    <div class="btnrow">
+      <button onclick="document.getElementById('bg_file').click()">选择图片</button>
+      <button class="ghost" onclick="clearImage('bg')">清除</button>
+    </div>
+    <input type="file" id="bg_file" accept="image/*" style="display:none">
+    <div class="tip" id="bg_msg"></div>
+    <div class="tip">上传后自动裁成 240×320、JPEG 压缩（约 20KB），显示在待机页文字下方</div>
+  </div>
 </div>
 
-<div class="card">
-  <div class="row"><label>待机页（时钟/天气/指数）</label>
-    <select id="standby"><option value="1">开启</option><option value="0">关闭</option></select>
+<!-- ============ 外观 ============ -->
+<div class="pane" id="pane-look">
+  <div class="card">
+    <div class="row"><label><b>开机图片</b></label></div>
+    <div class="imgbox" id="boot_box">未设置（开机直接进对话界面）</div>
+    <div class="btnrow">
+      <button onclick="document.getElementById('boot_file').click()">选择图片</button>
+      <button class="ghost" onclick="clearImage('boot')">清除</button>
+    </div>
+    <input type="file" id="boot_file" accept="image/*" style="display:none">
+    <div class="tip" id="boot_msg"></div>
+    <div class="tip">开机显示约 2 秒，然后进入正常界面</div>
   </div>
-  <div class="row"><label>城市</label><input type="text" id="standby_city" placeholder="上海"></div>
-  <div class="row"><label>指数/个股</label></div>
-  <input type="text" id="standby_symbols" placeholder="sh000001,sz399001,sz399006">
-  <div class="tip">代码格式：sh000001 上证 / sz399001 深成 / hk00700 / usNVDA，逗号分隔最多 4 个</div>
+
+  <div class="card">
+    <div class="row"><label>字体 / 表情资源包</label>
+      <select id="variant">
+        <option value="a20_e64" selected>20px 字体 + 64px 表情（推荐）</option>
+        <option value="a16_e32">16px 字体 + 32px 表情（省空间）</option>
+        <option value="a30_e64">30px 字体 + 64px 表情（大字）</option>
+      </select>
+    </div>
+    <button id="applyAssets" style="background:#ff9f43">应用并重启</button>
+    <div class="tip" id="amsg"></div>
+    <div class="tip">下载资源包写入 assets 分区并自动重启（约 5~20 秒），不影响上面两张图片</div>
+  </div>
 </div>
 
-<div class="card">
-  <div class="row"><label>音乐服务地址</label></div>
-  <input type="text" id="api" placeholder="http://47.116.199.150:2233">
-  <div class="tip">改完保存立即生效（无需重启）</div>
+<!-- ============ 声音 ============ -->
+<div class="pane" id="pane-sound">
+  <div class="card">
+    <div class="row"><label>音量 <span class="val" id="vv">-</span></label></div>
+    <input type="range" id="volume" min="0" max="100" step="1">
+    <div class="row"><label>音乐播放时音量比例 <span class="val" id="dv">-</span>%</label></div>
+    <input type="range" id="duck" min="30" max="100" step="5">
+    <div class="tip">播放音乐时自动压低音量，方便用唤醒词打断</div>
+  </div>
 </div>
 
-<div class="card">
-  <div class="row"><label>外观资源（字体 / 表情）</label>
-    <select id="variant">
-      <option value="a20_e64" selected>20px 字体 + 64px 表情（推荐）</option>
-      <option value="a16_e32">16px 字体 + 32px 表情（省空间）</option>
-      <option value="a30_e64">30px 字体 + 64px 表情（大字）</option>
-    </select>
+<!-- ============ 灯光 ============ -->
+<div class="pane" id="pane-led">
+  <div class="card">
+    <div class="row"><label>状态灯</label>
+      <select id="led_mode"><option value="on">跟随状态</option><option value="off">常灭</option><option value="color">固定颜色</option></select>
+    </div>
+    <div class="row"><label>固定颜色</label><input type="color" id="led_color" value="#00b3ff"></div>
   </div>
-  <button id="applyAssets" style="background:#ff9f43">应用并重启</button>
-  <div class="tip warn" id="amsg"></div>
-  <div class="tip">会下载资源包写入设备 assets 分区并自动重启（约 5~20 秒）</div>
+</div>
+
+<!-- ============ 系统 ============ -->
+<div class="pane" id="pane-sys">
+  <div class="card">
+    <div class="row"><label>音乐服务地址</label></div>
+    <input type="text" id="api" placeholder="http://47.116.199.150:2233">
+    <div class="tip">改完保存立即生效（无需重启）</div>
+  </div>
+  <div class="card">
+    <button class="ghost" onclick="reboot()">重启设备</button>
+    <div class="tip">重启约 8 秒；开机图片改动需要重启才能看到</div>
+  </div>
+  <div class="card" style="opacity:.9">
+    <div class="tip">当前状态</div><pre id="status">-</pre>
+  </div>
 </div>
 
 <button id="save">保存并应用</button>
-<div class="tip ok" id="msg"></div>
-<div class="card" style="opacity:.85">
-  <div class="tip">当前状态</div><pre id="status">-</pre>
-</div>
+<div class="tip" id="msg"></div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -130,13 +195,74 @@ function fill(s){
   if (s.api) $('api').value = s.api;
   $('standby').value = String(s.standby ?? 1);
   $('standby_city').value = s.standby_city || '上海';
-  $('standby_symbols').value = s.standby_symbols || 'sh000001,sz399001,sz399006';
+  $('standby_symbols').value = s.standby_symbols || 'usIXIC,usINX,sh000001';
   $('status').textContent = JSON.stringify(s, null, 1);
 }
 async function load(){
   try{ const r = await fetch('/api/status'); fill(await r.json()); }
   catch(e){ $('msg').textContent='读取失败：'+e; }
 }
+
+/* ---------------- 分类卡片：tab 切换 ---------------- */
+document.querySelectorAll('.tabs button').forEach(btn=>{
+  btn.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));
+    document.querySelectorAll('.pane').forEach(p=>p.classList.remove('on'));
+    btn.classList.add('on');
+    $('pane-'+btn.dataset.tab).classList.add('on');
+    window.scrollTo({top:0,behavior:'smooth'});
+  };
+});
+
+/* ---------------- 开机图 / 背景图 ---------------- */
+const IMG_W = 240, IMG_H = 320;
+function previewImage(kind){
+  const box = $(kind+'_box');
+  const url = '/api/image?kind='+kind+'&t='+Date.now();
+  const im = new Image();
+  im.onload = () => { box.innerHTML=''; box.appendChild(im); };
+  im.onerror = () => { box.textContent = kind==='bg' ? '未设置（使用深色渐变）' : '未设置（开机直接进对话界面）'; };
+  im.src = url;
+}
+async function uploadImage(kind, file){
+  const msg = $(kind+'_msg');
+  msg.textContent = '处理中…';
+  try{
+    const bmp = await createImageBitmap(file);
+    const cv = document.createElement('canvas');
+    cv.width = IMG_W; cv.height = IMG_H;
+    const ctx = cv.getContext('2d');
+    const scale = Math.max(IMG_W/bmp.width, IMG_H/bmp.height);
+    const w = bmp.width*scale, h = bmp.height*scale;
+    ctx.drawImage(bmp, (IMG_W-w)/2, (IMG_H-h)/2, w, h);
+    const blob = await new Promise(r=>cv.toBlob(r,'image/jpeg',0.85));
+    msg.textContent = '上传中…（'+(blob.size/1024).toFixed(0)+'KB）';
+    const r = await fetch('/api/image?kind='+kind,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob});
+    const j = await r.json();
+    msg.textContent = j.ok ? '已保存 ✓' : ('失败：'+(j.error||''));
+    msg.className = 'tip ' + (j.ok?'ok':'warn');
+    if (j.ok) previewImage(kind);
+  }catch(e){ msg.textContent = '失败：'+e; msg.className='tip warn'; }
+}
+async function clearImage(kind){
+  if(!confirm('确定清除这张图片吗？')) return;
+  const msg = $(kind+'_msg');
+  try{
+    const r = await fetch('/api/image?kind='+kind+'&clear=1',{method:'POST'});
+    const j = await r.json();
+    msg.textContent = j.ok ? '已清除 ✓' : ('失败：'+(j.error||''));
+    msg.className = 'tip ' + (j.ok?'ok':'warn');
+    previewImage(kind);
+  }catch(e){ msg.textContent='失败：'+e; }
+}
+['boot','bg'].forEach(kind=>{
+  $(kind+'_file').addEventListener('change', e=>{
+    if (e.target.files && e.target.files[0]) uploadImage(kind, e.target.files[0]);
+    e.target.value = '';
+  });
+  previewImage(kind);
+});
+
 ['brightness','volume','duck'].forEach(id=>{
   $(id).addEventListener('input',()=>{ $(id[0]+'v').textContent = $(id).value; });
 });
@@ -162,6 +288,12 @@ $('save').onclick = async () => {
     load();
   }catch(e){ $('msg').textContent='请求失败：'+e; }
 };
+async function reboot(){
+  if(!confirm('确定重启设备吗？')) return;
+  $('msg').textContent = '重启中…约 8 秒后刷新页面';
+  try{ await fetch('/api/reboot',{method:'POST'}); }catch(e){}
+  setTimeout(load, 9000);
+}
 $('applyAssets').onclick = async () => {
   const v = $('variant').value;
   if(!confirm('将把「'+v+'」资源包写入设备并重启，确定吗？')) return;
@@ -278,6 +410,132 @@ esp_err_t HandleAssetsApply(httpd_req_t* req) {
     /* 让响应先发出去，再重启 */
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
+    return ESP_OK;
+}
+
+
+/* ---------------- 用户图片（开机图 / 待机背景） ----------------
+ * GET  /api/image?kind=boot|bg        回读原始 JPEG（网页预览用）
+ * POST /api/image?kind=boot|bg        直接上传 JPEG 字节（网页用 canvas 缩放到 240x320）
+ * POST /api/image?kind=boot|bg&clear=1 清除
+ */
+esp_err_t HandleReboot(httpd_req_t* req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"reboot\":true}");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+    return ESP_OK;
+}
+
+esp_err_t HandleImageGet(httpd_req_t* req) {
+    char query[64] = {0};
+    if (httpd_req_get_url_query_len(req) > 0) {
+        httpd_req_get_url_query_str(req, query, sizeof(query));
+    }
+    char kind_str[16] = {0};
+    if (httpd_query_key_value(query, "kind", kind_str, sizeof(kind_str)) != ESP_OK) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no kind\"}");
+        return ESP_FAIL;
+    }
+    auto kind = strcmp(kind_str, "bg") == 0 ? UserImage::kBackground : UserImage::kBoot;
+    auto& img = UserImage::GetInstance();
+    const uint32_t len = img.length(kind);
+    if (len == 0) {
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+    auto* buf = static_cast<uint8_t*>(heap_caps_malloc(len, MALLOC_CAP_SPIRAM));
+    if (buf == nullptr) {
+        buf = static_cast<uint8_t*>(malloc(len));
+    }
+    if (buf == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    const size_t got = img.Read(kind, buf, len);
+    if (got == 0) {
+        free(buf);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, reinterpret_cast<const char*>(buf), got);
+    free(buf);
+    return err;
+}
+
+esp_err_t HandleImagePost(httpd_req_t* req) {
+    char query[128] = {0};
+    if (httpd_req_get_url_query_len(req) > 0) {
+        httpd_req_get_url_query_str(req, query, sizeof(query));
+    }
+    char kind_str[16] = {0};
+    char clear_str[8] = {0};
+    if (httpd_query_key_value(query, "kind", kind_str, sizeof(kind_str)) != ESP_OK) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no kind\"}");
+        return ESP_FAIL;
+    }
+    auto kind = strcmp(kind_str, "bg") == 0 ? UserImage::kBackground : UserImage::kBoot;
+    auto& img = UserImage::GetInstance();
+
+    if (httpd_query_key_value(query, "clear", clear_str, sizeof(clear_str)) == ESP_OK &&
+        clear_str[0] == '1') {
+        img.Clear(kind);
+        StandbyService::GetInstance().ReloadBackground();
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"cleared\":true}");
+        return ESP_OK;
+    }
+
+    const int total = req->content_len;
+    if (total < 64 || total > 400 * 1024) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"bad size\"}");
+        return ESP_FAIL;
+    }
+    if (!img.BeginWrite(kind)) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"erase failed\"}");
+        return ESP_FAIL;
+    }
+    auto* chunk = static_cast<uint8_t*>(heap_caps_malloc(8192, MALLOC_CAP_SPIRAM));
+    if (chunk == nullptr) {
+        chunk = static_cast<uint8_t*>(malloc(8192));
+    }
+    if (chunk == nullptr) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    int received = 0;
+    bool ok = true;
+    while (received < total) {
+        int want = total - received;
+        if (want > 8192) {
+            want = 8192;
+        }
+        int n = httpd_req_recv(req, reinterpret_cast<char*>(chunk), want);
+        if (n <= 0) {
+            ok = false;
+            break;
+        }
+        if (!img.WriteChunk(chunk, n)) {
+            ok = false;
+            break;
+        }
+        received += n;
+    }
+    free(chunk);
+
+    if (!ok || !img.EndWrite(0, 0)) {
+        img.Clear(kind);
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"write failed\"}");
+        return ESP_FAIL;
+    }
+    if (kind == UserImage::kBackground) {
+        StandbyService::GetInstance().ReloadBackground();
+    }
+    ESP_LOGI(TAG, "image uploaded: kind=%s %d bytes", kind_str, received);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
 
@@ -430,10 +688,16 @@ bool AdminServer::Start() {
     httpd_uri_t uri_status = {.uri = "/api/status", .method = HTTP_GET, .handler = HandleStatus, .user_ctx = nullptr};
     httpd_uri_t uri_settings = {.uri = "/api/settings", .method = HTTP_POST, .handler = HandleSettings, .user_ctx = nullptr};
     httpd_uri_t uri_assets = {.uri = "/api/assets", .method = HTTP_POST, .handler = HandleAssetsApply, .user_ctx = nullptr};
+    httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
+    httpd_uri_t uri_image_get = {.uri = "/api/image", .method = HTTP_GET, .handler = HandleImageGet, .user_ctx = nullptr};
+    httpd_uri_t uri_image_post = {.uri = "/api/image", .method = HTTP_POST, .handler = HandleImagePost, .user_ctx = nullptr};
     httpd_register_uri_handler(g_server, &uri_root);
     httpd_register_uri_handler(g_server, &uri_status);
     httpd_register_uri_handler(g_server, &uri_settings);
     httpd_register_uri_handler(g_server, &uri_assets);
+    httpd_register_uri_handler(g_server, &uri_reboot);
+    httpd_register_uri_handler(g_server, &uri_image_get);
+    httpd_register_uri_handler(g_server, &uri_image_post);
     ESP_LOGI(TAG, "admin web: http://<device-ip>:8080/");
     return true;
 }
