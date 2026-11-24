@@ -64,7 +64,15 @@ pre{background:#0b1a2a;border-radius:10px;padding:10px;font-size:12px;overflow:a
 .imgbox img{width:100%;height:100%;object-fit:cover}
 .btnrow{display:flex;gap:8px}
 .btnrow button{flex:1}
-button.ghost{background:#1b3350;color:#cfe3f7}}
+button.ghost{background:#1b3350;color:#cfe3f7}
+.modal{position:fixed;inset:0;background:rgba(4,10,18,.86);display:none;align-items:center;justify-content:center;z-index:50;padding:14px}
+.modal.on{display:flex}
+.modal-box{background:#12253c;border:1px solid #24425f;border-radius:16px;padding:14px;width:100%;max-width:340px}
+.modal-title{font-weight:700;margin-bottom:10px}
+.crop-wrap{width:100%;display:flex;justify-content:center;margin-bottom:10px;touch-action:none}
+#crop_canvas{width:210px;height:280px;border-radius:10px;background:#0b1a2a;box-shadow:0 0 0 1px #2b4d70 inset;cursor:grab}
+#crop_canvas.dragging{cursor:grabbing}
+}}
 </style>
 </style></head><body><div class="wrap">
 <h1>小智设备管理</h1>
@@ -178,6 +186,22 @@ button.ghost{background:#1b3350;color:#cfe3f7}}
 
 <button id="save">保存并应用</button>
 <div class="tip" id="msg"></div>
+
+<div class="modal" id="crop_modal">
+  <div class="modal-box">
+    <div class="modal-title">裁切图片 · <span id="crop_title">-</span></div>
+    <div class="crop-wrap"><canvas id="crop_canvas" width="240" height="320"></canvas></div>
+    <div class="row"><label>缩放 <span class="val" id="crop_zv">100</span>%</label></div>
+    <input type="range" id="crop_zoom" min="100" max="400" step="5" value="100">
+    <div class="tip">拖动图片调整位置；框内就是屏幕最终显示的样子（240×320）</div>
+    <div class="btnrow" style="margin-top:10px">
+      <button class="ghost" onclick="cropCancel()">取消</button>
+      <button class="ghost" onclick="cropReset()">复位</button>
+    </div>
+    <button id="crop_ok">确认并上传</button>
+    <div class="tip" id="crop_msg"></div>
+  </div>
+</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -224,26 +248,90 @@ function previewImage(kind){
   im.onerror = () => { box.textContent = kind==='bg' ? '未设置（使用深色渐变）' : '未设置（开机直接进对话界面）'; };
   im.src = url;
 }
-async function uploadImage(kind, file){
-  const msg = $(kind+'_msg');
-  msg.textContent = '处理中…';
-  try{
-    const bmp = await createImageBitmap(file);
-    const cv = document.createElement('canvas');
-    cv.width = IMG_W; cv.height = IMG_H;
-    const ctx = cv.getContext('2d');
-    const scale = Math.max(IMG_W/bmp.width, IMG_H/bmp.height);
-    const w = bmp.width*scale, h = bmp.height*scale;
-    ctx.drawImage(bmp, (IMG_W-w)/2, (IMG_H-h)/2, w, h);
-    const blob = await new Promise(r=>cv.toBlob(r,'image/jpeg',0.85));
-    msg.textContent = '上传中…（'+(blob.size/1024).toFixed(0)+'KB）';
-    const r = await fetch('/api/image?kind='+kind,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob});
-    const j = await r.json();
-    msg.textContent = j.ok ? '已保存 ✓' : ('失败：'+(j.error||''));
-    msg.className = 'tip ' + (j.ok?'ok':'warn');
-    if (j.ok) previewImage(kind);
-  }catch(e){ msg.textContent = '失败：'+e; msg.className='tip warn'; }
+/* ---------------- 裁切弹窗：WYSIWYG 240x320 ---------------- */
+const crop = {kind:null, bmp:null, zoom:1, ox:0, oy:0, dragging:false, px:0, py:0};
+const cv = document.getElementById('crop_canvas');
+const ctx = cv.getContext('2d');
+
+function cropTitle(kind){ return kind === 'bg' ? '待机背景图' : '开机图'; }
+
+function drawCrop(){
+  if (!crop.bmp) return;
+  const iw = crop.bmp.width, ih = crop.bmp.height;
+  const base = Math.max(IMG_W/iw, IMG_H/ih);       // cover：保证铺满
+  const k = base * crop.zoom;
+  const dw = iw*k, dh = ih*k;
+  // 允许移动范围：图比画布大的部分
+  const maxX = Math.max(0, (dw-IMG_W)/2), maxY = Math.max(0, (dh-IMG_H)/2);
+  crop.ox = Math.min(maxX, Math.max(-maxX, crop.ox));
+  crop.oy = Math.min(maxY, Math.max(-maxY, crop.oy));
+  ctx.fillStyle = '#0b1a2a';
+  ctx.fillRect(0,0,IMG_W,IMG_H);
+  ctx.drawImage(crop.bmp, (IMG_W-dw)/2 + crop.ox, (IMG_H-dh)/2 + crop.oy, dw, dh);
 }
+
+function openCrop(kind, file){
+  const msg = $(kind+'_msg');
+  msg.textContent = '读取图片…';
+  createImageBitmap(file).then(bmp => {
+    crop.kind = kind; crop.bmp = bmp; crop.zoom = 1; crop.ox = 0; crop.oy = 0;
+    $('crop_title').textContent = cropTitle(kind);
+    $('crop_zoom').value = 100; $('crop_zv').textContent = '100';
+    $('crop_msg').textContent = '原图 '+bmp.width+'×'+bmp.height+' → 输出 240×320';
+    $('crop_modal').classList.add('on');
+    msg.textContent = '';
+    drawCrop();
+  }).catch(e => { msg.textContent = '读取失败：'+e; msg.className='tip warn'; });
+}
+function cropCancel(){ $('crop_modal').classList.remove('on'); crop.bmp = null; }
+function cropReset(){ crop.zoom = 1; crop.ox = 0; crop.oy = 0; $('crop_zoom').value = 100; $('crop_zv').textContent='100'; drawCrop(); }
+
+$('crop_zoom').addEventListener('input', e => {
+  crop.zoom = (+e.target.value)/100;
+  $('crop_zv').textContent = e.target.value;
+  drawCrop();
+});
+
+/* 拖动 / 触摸 */
+cv.addEventListener('pointerdown', e => {
+  if (!crop.bmp) return;
+  crop.dragging = true; crop.px = e.clientX; crop.py = e.clientY;
+  cv.classList.add('dragging'); cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (!crop.dragging || !crop.bmp) return;
+  const rect = cv.getBoundingClientRect();
+  const sx = IMG_W / rect.width;      // 显示尺寸 -> 画布像素
+  crop.ox += (e.clientX - crop.px) * sx;
+  crop.oy += (e.clientY - crop.py) * sx;
+  crop.px = e.clientX; crop.py = e.clientY;
+  drawCrop();
+});
+['pointerup','pointercancel'].forEach(ev => cv.addEventListener(ev, () => {
+  crop.dragging = false; cv.classList.remove('dragging');
+}));
+
+$('crop_ok').onclick = async () => {
+  if (!crop.bmp) return;
+  const kind = crop.kind;
+  const msg = $(kind+'_msg');
+  $('crop_msg').textContent = '生成并上传…';
+  try{
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+    $('crop_msg').textContent = '上传中…（'+(blob.size/1024).toFixed(0)+'KB，240×320）';
+    const r = await fetch('/api/image?kind='+kind, {method:'POST', headers:{'Content-Type':'image/jpeg'}, body:blob});
+    const j = await r.json();
+    if (j.ok) {
+      cropCancel();
+      msg.className = 'tip ok';
+      msg.textContent = '已保存 ✓（240×320，'+(blob.size/1024).toFixed(0)+'KB）';
+      previewImage(kind);
+    } else {
+      $('crop_msg').textContent = '失败：'+(j.error||'');
+    }
+  }catch(e){ $('crop_msg').textContent = '失败：'+e; }
+};
+
 async function clearImage(kind){
   if(!confirm('确定清除这张图片吗？')) return;
   const msg = $(kind+'_msg');
@@ -257,7 +345,7 @@ async function clearImage(kind){
 }
 ['boot','bg'].forEach(kind=>{
   $(kind+'_file').addEventListener('change', e=>{
-    if (e.target.files && e.target.files[0]) uploadImage(kind, e.target.files[0]);
+    if (e.target.files && e.target.files[0]) openCrop(kind, e.target.files[0]);
     e.target.value = '';
   });
   previewImage(kind);
@@ -527,7 +615,9 @@ esp_err_t HandleImagePost(httpd_req_t* req) {
 
     if (!ok || !img.EndWrite(0, 0)) {
         img.Clear(kind);
-        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"write failed\"}");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"image_too_large_or_invalid\"}");
         return ESP_FAIL;
     }
     if (kind == UserImage::kBackground) {

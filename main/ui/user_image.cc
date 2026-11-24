@@ -27,6 +27,46 @@ struct ImageHeader {
     uint32_t reserved[3];
 };
 
+
+/* 从 JPEG 头里读尺寸（SOF0/1/2/...）；失败返回 false。
+ * 目的：防止网页以外的手段直接塞超大图（解码一次要 w*h*2 字节内存）。 */
+bool JpegSize(const uint8_t* d, size_t n, uint32_t* w, uint32_t* h) {
+    if (n < 4 || d[0] != 0xFF || d[1] != 0xD8) {
+        return false;
+    }
+    size_t i = 2;
+    while (i + 9 < n) {
+        if (d[i] != 0xFF) {
+            i++;
+            continue;
+        }
+        const uint8_t m = d[i + 1];
+        if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7) || m == 0xFF) {
+            i += 2;
+            continue;
+        }
+        if (m == 0xDA || i + 4 >= n) {
+            return false;
+        }
+        const uint16_t len = static_cast<uint16_t>((d[i + 2] << 8) | d[i + 3]);
+        if (len < 2) {
+            return false;
+        }
+        const bool is_sof = (m >= 0xC0 && m <= 0xC3) || (m >= 0xC5 && m <= 0xC7) ||
+                            (m >= 0xC9 && m <= 0xCB) || (m >= 0xCD && m <= 0xCF);
+        if (is_sof) {
+            if (i + 9 >= n) {
+                return false;
+            }
+            *h = static_cast<uint32_t>((d[i + 5] << 8) | d[i + 6]);
+            *w = static_cast<uint32_t>((d[i + 7] << 8) | d[i + 8]);
+            return *w > 0 && *h > 0;
+        }
+        i += 2 + len;
+    }
+    return false;
+}
+
 void HideSplashCb(void* arg) {
     auto* obj = static_cast<lv_obj_t**>(arg);
     if (obj != nullptr && *obj != nullptr) {
@@ -161,8 +201,32 @@ bool UserImage::EndWrite(uint32_t width, uint32_t height) {
         ESP_LOGE(TAG, "write header failed: %s", esp_err_to_name(err));
         return false;
     }
+    /* 回读 JPEG 头校验尺寸：屏幕只有 240x320，超过 1024 的解码代价过大，直接拒绝 */
+    uint8_t* probe = static_cast<uint8_t*>(heap_caps_malloc(4096, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (probe != nullptr) {
+        size_t want = written_ < 4096 ? written_ : 4096;
+        uint32_t jw = 0, jh = 0;
+        if (esp_partition_read(static_cast<const esp_partition_t*>(part_), off + kHdrSize, probe, want) == ESP_OK &&
+            JpegSize(probe, want, &jw, &jh)) {
+            if (jw > 1024 || jh > 1024) {
+                ESP_LOGW(TAG, "reject oversized image %ux%u (screen is 240x320)", (unsigned)jw, (unsigned)jh);
+                heap_caps_free(probe);
+                ImageHeader empty = {};
+                esp_partition_erase_range(static_cast<const esp_partition_t*>(part_), off, 4096);
+                esp_partition_write(static_cast<const esp_partition_t*>(part_), off, &empty, sizeof(empty));
+                written_ = 0;
+                return false;
+            }
+            hdr.width = jw;
+            hdr.height = jh;
+            esp_partition_write(static_cast<const esp_partition_t*>(part_), off, &hdr, sizeof(hdr));
+        }
+        heap_caps_free(probe);
+    }
+
     gen_++;
-    ESP_LOGI(TAG, "image saved: kind=%d %u bytes", (int)writing_, (unsigned)written_);
+    ESP_LOGI(TAG, "image saved: kind=%d %u bytes (%ux%u)", (int)writing_, (unsigned)written_,
+             (unsigned)hdr.width, (unsigned)hdr.height);
     written_ = 0;
     return true;
 }
