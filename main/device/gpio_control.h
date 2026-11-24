@@ -46,6 +46,15 @@ public:
     /** 引脚是否被板子占用；reason 返回原因 */
     bool IsReserved(int gpio, std::string* reason) const;
 
+    struct UsedPin {
+        int gpio;
+        std::string reason;
+    };
+    /** 所有已占用引脚（板载 + 固定禁用 + 已配置开关），供网页列"说明栏" */
+    std::vector<UsedPin> UsedPins() const;
+    /** 当前可选的引脚（ESP32-S3 有效脚 - 已占用） */
+    std::vector<int> AvailablePins() const;
+
 private:
     GpioControl() = default;
 };

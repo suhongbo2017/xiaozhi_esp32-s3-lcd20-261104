@@ -271,22 +271,22 @@ public:
     }
 
     /* 用户自定义 GPIO 时这些脚要禁止占用（否则会把屏/音频/灯搞坏） */
-    std::vector<int> ReservedGpios() override {
+    std::vector<std::pair<int, std::string>> ReservedGpios() override {
         return {
-            BOOT_BUTTON_GPIO,        /* 0  启动键 */
-            AUDIO_PDM_MIC_GPIO_CLK,  /* 3  麦克风时钟 */
-            DISPLAY_CLK_PIN,         /* 4  屏 SPI CLK */
-            DISPLAY_MOSI_PIN,        /* 5  屏 SPI MOSI */
-            DISPLAY_RST_PIN,         /* 6  屏复位 */
-            DISPLAY_DC_PIN,          /* 7  屏 DC */
-            AUDIO_I2S_SPK_GPIO_BCLK, /* 8  喇叭 BCLK */
-            AUDIO_I2S_SPK_GPIO_LRCK, /* 9  喇叭 LRCLK */
-            AUDIO_I2S_SPK_GPIO_DOUT, /* 10 喇叭数据 */
-            AUDIO_PDM_MIC_GPIO_DIN,  /* 11 麦克风数据 */
-            DISPLAY_CS_PIN,          /* 15 屏 CS */
-            LAMP_GPIO,               /* 18 灯带 */
-            DISPLAY_BACKLIGHT_PIN,   /* 45 背光 */
-            BUILTIN_LED_GPIO,        /* 48 状态灯 */
+            {BOOT_BUTTON_GPIO, "启动键 BOOT"},
+            {AUDIO_PDM_MIC_GPIO_CLK, "麦克风时钟"},
+            {DISPLAY_CLK_PIN, "屏幕 SPI CLK"},
+            {DISPLAY_MOSI_PIN, "屏幕 SPI MOSI"},
+            {DISPLAY_RST_PIN, "屏幕复位"},
+            {DISPLAY_DC_PIN, "屏幕 DC"},
+            {AUDIO_I2S_SPK_GPIO_BCLK, "喇叭 BCLK"},
+            {AUDIO_I2S_SPK_GPIO_LRCK, "喇叭 LRCLK"},
+            {AUDIO_I2S_SPK_GPIO_DOUT, "喇叭数据"},
+            {AUDIO_PDM_MIC_GPIO_DIN, "麦克风数据"},
+            {DISPLAY_CS_PIN, "屏幕 CS"},
+            {LAMP_GPIO, "灯带"},
+            {DISPLAY_BACKLIGHT_PIN, "屏幕背光"},
+            {BUILTIN_LED_GPIO, "状态灯"},
         };
     }
 

@@ -6,6 +6,7 @@
 #include <mqtt.h>
 #include <udp.h>
 #include <string>
+#include <utility>
 #include <vector>
 #include <functional>
 #include <network_interface.h>
@@ -81,8 +82,8 @@ public:
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging);
     virtual std::string GetSystemInfoJson();
     virtual void SetPowerSaveLevel(PowerSaveLevel level) = 0;
-    /** 板子自用的 GPIO（屏/音频/灯/按键/闪存等），用户自定义开关不能占用 */
-    virtual std::vector<int> ReservedGpios() { return {}; }
+    /** 板子自用的 GPIO（屏/音频/灯/按键/闪存等）：键=引脚号，值=用途说明 */
+    virtual std::vector<std::pair<int, std::string>> ReservedGpios() { return {}; }
 
     virtual std::string GetBoardJson() = 0;
     virtual std::string GetDeviceStatusJson() = 0;

@@ -192,14 +192,19 @@ button.ghost{background:#1b3350;color:#cfe3f7}
   <div class="card">
     <div class="row"><label><b>新增 / 编辑</b></label></div>
     <div class="row"><label>名称</label><input type="text" id="g_name" placeholder="打印机灯光"></div>
-    <div class="row"><label>GPIO 号</label><input type="text" id="g_pin" placeholder="12"></div>
+    <div class="row"><label>GPIO 号</label>
+      <select id="g_pin"><option value="">（加载中…）</option></select>
+    </div>
     <div class="row"><label>触发电平</label>
       <select id="g_active"><option value="1">高电平点亮</option><option value="0">低电平点亮（继电器）</option></select>
     </div>
     <div class="row"><label>上电初始状态</label>
       <select id="g_init"><option value="0">关闭</option><option value="1">打开</option></select>
     </div>
-    <div class="tip warn" id="g_reserved"></div>
+    <div class="card" style="background:#0f2033;margin:12px 0 0">
+      <div class="tip">已被占用的引脚</div>
+      <div class="tip" id="g_reserved" style="line-height:1.9"></div>
+    </div>
     <button id="g_add">添加这一路</button>
     <div class="tip" id="g_msg"></div>
   </div>
@@ -272,7 +277,7 @@ async function load(){
 
 
 /* ---------------- 用户 GPIO 开关 ---------------- */
-let gpioDevices = [], gpioReserved = [];
+let gpioDevices = [], gpioReserved = [], gpioUsed = [], gpioAvailable = [];
 
 function renderGpio(){
   const box = $('gpio_list');
@@ -307,8 +312,24 @@ function renderGpio(){
       box.appendChild(row);
     });
   }
-  const res = gpioReserved.length ? ('已占用（不能选）：' + gpioReserved.join(', ')) : '';
-  $('g_reserved').textContent = res + ' · 另外 0/19/20/26-37/43/44 也不能用';
+  /* 下拉框：只放当前可用的引脚 */
+  const sel = $('g_pin');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  if (!gpioAvailable.length) {
+    const o = document.createElement('option'); o.value=''; o.textContent='没有可用引脚了'; sel.appendChild(o);
+  } else {
+    gpioAvailable.forEach(pin => {
+      const o = document.createElement('option');
+      o.value = pin; o.textContent = 'GPIO' + pin;
+      sel.appendChild(o);
+    });
+    if (prev && gpioAvailable.includes(+prev)) sel.value = prev;
+  }
+
+  /* 说明栏：所有已占用引脚 + 原因 */
+  const notes = gpioUsed.map(u => 'GPIO' + u.gpio + ' · ' + u.reason);
+  $('g_reserved').innerHTML = notes.length ? notes.join('<br>') : '（暂无）';
 }
 
 async function loadGpio(){
@@ -317,6 +338,8 @@ async function loadGpio(){
     const j = await r.json();
     gpioDevices = j.devices || [];
     gpioReserved = j.reserved || [];
+    gpioUsed = j.used || [];
+    gpioAvailable = j.available || [];
     renderGpio();
   }catch(e){ $('g_msg').textContent = '读取失败：'+e; }
 }
@@ -347,11 +370,11 @@ $('g_add').onclick = () => {
   const name = $('g_name').value.trim();
   const pin = parseInt($('g_pin').value, 10);
   if (!name){ $('g_msg').textContent='请填写名称'; $('g_msg').className='tip warn'; return; }
-  if (!(pin >= 0 && pin <= 48)){ $('g_msg').textContent='GPIO 号要填 0~48'; $('g_msg').className='tip warn'; return; }
+  if (!(pin >= 0 && pin <= 48)){ $('g_msg').textContent='没有可用引脚'; $('g_msg').className='tip warn'; return; }
   const devices = gpioDevices.map(d => ({name:d.name, gpio:d.gpio, active_high:d.active_high, initial_on:d.initial_on}));
   devices.push({name: name, gpio: pin, active_high: +$('g_active').value === 1, initial_on: +$('g_init').value === 1});
   saveGpio(devices, '已添加 ✓（现在可以直接说「打开'+name+'」）');
-  $('g_name').value=''; $('g_pin').value='';
+  $('g_name').value='';
 };
 
 function removeGpio(idx){
@@ -831,8 +854,21 @@ esp_err_t HandleGpio(httpd_req_t* req) {
             cJSON_AddItemToArray(arr, item);
         }
         auto* reserved = cJSON_AddArrayToObject(root, "reserved");
-        for (int pin : Board::GetInstance().ReservedGpios()) {
-            cJSON_AddItemToArray(reserved, cJSON_CreateNumber(pin));
+        for (const auto& entry : Board::GetInstance().ReservedGpios()) {
+            cJSON_AddItemToArray(reserved, cJSON_CreateNumber(entry.first));
+        }
+        /* 说明栏：所有已占用引脚 + 原因 */
+        auto* used = cJSON_AddArrayToObject(root, "used");
+        for (const auto& u : gpio.UsedPins()) {
+            cJSON* item = cJSON_CreateObject();
+            cJSON_AddNumberToObject(item, "gpio", u.gpio);
+            cJSON_AddStringToObject(item, "reason", u.reason.c_str());
+            cJSON_AddItemToArray(used, item);
+        }
+        /* 下拉框：当前还能选的引脚 */
+        auto* avail = cJSON_AddArrayToObject(root, "available");
+        for (int pin : gpio.AvailablePins()) {
+            cJSON_AddItemToArray(avail, cJSON_CreateNumber(pin));
         }
         char* out = cJSON_PrintUnformatted(root);
         httpd_resp_sendstr(req, out != nullptr ? out : "{}");

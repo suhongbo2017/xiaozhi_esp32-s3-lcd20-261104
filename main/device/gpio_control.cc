@@ -161,15 +161,65 @@ bool GpioControl::IsReserved(int gpio, std::string* reason) const {
         }
     }
     auto& board = Board::GetInstance();
-    for (int pin : board.ReservedGpios()) {
-        if (pin == gpio) {
+    for (const auto& entry : board.ReservedGpios()) {
+        if (entry.first == gpio) {
             if (reason != nullptr) {
-                *reason = "本板硬件占用";
+                *reason = entry.second;
             }
             return true;
         }
     }
     return false;
+}
+
+std::vector<GpioControl::UsedPin> GpioControl::UsedPins() const {
+    std::vector<UsedPin> used;
+    for (const auto& fp : kFixedReserved) {
+        used.push_back({fp.pin, fp.why});
+    }
+    auto& board = Board::GetInstance();
+    for (const auto& entry : board.ReservedGpios()) {
+        bool dup = false;
+        for (const auto& u : used) {
+            if (u.gpio == entry.first) {
+                dup = true;   /* 固定表里已有（如 0 启动键），保留固定表说明 */
+                break;
+            }
+        }
+        if (!dup) {
+            used.push_back({entry.first, entry.second + "（板载）"});
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        for (const auto& d : g_devices) {
+            used.push_back({d.gpio, d.name + "（已配置）"});
+        }
+    }
+    std::sort(used.begin(), used.end(), [](const UsedPin& a, const UsedPin& b) { return a.gpio < b.gpio; });
+    return used;
+}
+
+std::vector<int> GpioControl::AvailablePins() const {
+    /* ESP32-S3 有效 GPIO：0~21 与 26~48（22~25 不存在） */
+    std::vector<UsedPin> used = UsedPins();
+    std::vector<int> out;
+    for (int pin = 0; pin <= 48; pin++) {
+        if (pin >= 22 && pin <= 25) {
+            continue;
+        }
+        bool taken = false;
+        for (const auto& u : used) {
+            if (u.gpio == pin) {
+                taken = true;
+                break;
+            }
+        }
+        if (!taken) {
+            out.push_back(pin);
+        }
+    }
+    return out;
 }
 
 void GpioControl::Initialize() {

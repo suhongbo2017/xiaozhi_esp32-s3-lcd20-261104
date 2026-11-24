@@ -12,11 +12,21 @@
 
 新增 / 编辑
   名称      [打印机灯光]
-  GPIO 号   [12]
+  GPIO 号   [GPIO1 ▼]        ← 下拉框，只列"当前可用"的引脚
   触发电平  [高电平点亮 / 低电平点亮（继电器）]
   初始状态  [关闭 / 打开]
   [添加这一路]
+
+已被占用的引脚（说明栏，逐行列出，含原因）
+  GPIO0  · 启动键(BOOT)
+  GPIO3  · 麦克风时钟（板载）
+  GPIO4  · 屏幕 SPI CLK（板载）
+  ...
+  GPIO12 · 打印机灯光（已配置）
 ```
+
+**下拉框是"活的"**：`/api/gpio` 每次都返回 `available`（当前可选的脚）和 `used`（全部占用脚+原因），
+所以加一路之后那个脚立刻从下拉里消失、并出现在说明栏里标为「（已配置）」；删掉又回到下拉里。
 
 加完就能动嘴：**"打开打印机灯光" / "把打印机灯光关了" / "翻转一下台灯"**。
 大模型会先调 `self.gpio.list` 拿到开关名，再调 `self.gpio.set`。
@@ -53,13 +63,17 @@ NVS 命名空间 `gpio`，键 `config` 存 JSON 数组：
 最多 4 路。保存时逐条校验（名称非空/不重复、0~48、未被占用、GPIO 不重复），
 **全部通过才落盘并立即 `gpio_config()` + 应用初始电平**；旧配置的引脚会 `gpio_reset_pin()`。
 
-### 冲突检测的两层来源
+### 冲突检测的三层来源
 
 ```cpp
-Board::ReservedGpios()      // 新增虚函数，各板自己声明硬件占用的脚
-  └─ esp32s3-lcd20 覆写：0,3,4,5,6,7,8,9,10,11,15,18,45,48
-kFixedReserved[]            // 通用危险脚：USB/UART/闪存/strapping
+Board::ReservedGpios()   // 新增虚函数：返回 {引脚, 用途} 对，各板自己声明
+  └─ esp32s3-lcd20 覆写 14 项：0 启动键 / 3 麦克风时钟 / 4,5,6,7,15 屏 SPI /
+     8,9,10 喇叭 I2S / 11 麦克风数据 / 18 灯带 / 45 背光 / 48 状态灯
+kFixedReserved[]         // 通用危险脚：USB 19,20 / 闪存+PSRAM 26~37 / UART 43,44 / strapping 46
+已配置的开关              // UsedPins() 里以「名称（已配置）」参与
 ```
+
+`AvailablePins()` = ESP32-S3 有效脚（0~21、26~48，**22~25 不存在**）减去上面三层。
 
 核心层只依赖 `Board` 接口，不 include 具体板子的 `config.h`（符合分层要求）。
 
@@ -76,7 +90,12 @@ self.gpio.set(device, state)   -> device 支持名称或序号，state: on/off/t
 ## 实测
 
 ```
-GET  /api/gpio -> {"devices":[],"reserved":[0,3,4,5,6,7,8,9,10,11,15,18,45,48]}
+GET  /api/gpio
+  -> {"devices":[],"reserved":[0,3,...],
+      "available":[1,2,12,13,14,16,17,21,38,39,40,41,42,47],
+      "used":[{"gpio":0,"reason":"启动键(BOOT)"},{"gpio":3,"reason":"麦克风时钟（板载）"},...]}
+加 GPIO12 之后：available 里 12 消失，used 里出现 {"gpio":12,"reason":"打印机灯光（已配置）"} ✓
+删掉之后：12 回到 available ✓
 POST /api/gpio {devices:[{name:"打印机灯光",gpio:3}]}
      -> {"ok":false,"error":"GPIO3 是本板硬件占用，不能用"}          ← 挡住危险脚
 POST /api/gpio {devices:[{name:"打印机灯光",gpio:12,initial_on:true}]}
