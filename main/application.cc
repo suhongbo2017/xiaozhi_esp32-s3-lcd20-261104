@@ -6,6 +6,7 @@
 #include "display.h"
 #include "mcp_server.h"
 #include "market/stock_tools.h"
+#include "ui/standby_service.h"
 #include "web/admin_server.h"
 #include "music/music_player.h"
 #include "mqtt_protocol.h"
@@ -59,7 +60,14 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
-bool Application::SetDeviceState(DeviceState state) { return state_machine_.TransitionTo(state); }
+bool Application::SetDeviceState(DeviceState state) {
+    bool ok = state_machine_.TransitionTo(state);
+    if (ok) {
+        /* 待机页只在空闲时显示（放音乐时由 StandbyService 内部再判断） */
+        StandbyService::GetInstance().SetIdle(state == kDeviceStateIdle);
+    }
+    return ok;
+}
 
 void Application::Initialize() {
     auto& board = Board::GetInstance();
@@ -68,6 +76,8 @@ void Application::Initialize() {
     // Setup the display
     auto display = board.GetDisplay();
     display->SetupUI();
+    /* 待机页（时钟/日期/天气/指数）：空闲时显示 */
+    StandbyService::GetInstance().Initialize(display);
     // Print board name/version info
     display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
 
@@ -144,6 +154,7 @@ void Application::Initialize() {
                 display->ShowNotification(msg.c_str(), 30000);
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
                 AdminServer::Start();   /* 网络就绪后再起管理网页（8080） */
+                StandbyService::GetInstance().OnNetworkReady();
                 break;
             }
             case NetworkEvent::Disconnected:
@@ -994,6 +1005,8 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = state_machine_.GetState();
     clock_ticks_ = 0;
+    /* 待机页：用真实状态（Starting→Idle 会被状态机拒绝，不能只靠 SetDeviceState 的返回值） */
+    StandbyService::GetInstance().SetIdle(new_state == kDeviceStateIdle);
     // Any state change invalidates a pending deferred listening start;
     // the Listening case below re-arms it when needed.
     pending_listening_start_ = false;

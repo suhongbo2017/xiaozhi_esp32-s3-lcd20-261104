@@ -2,6 +2,7 @@
 
 #include "audio_codec.h"
 #include "asset_ota.h"
+#include "ui/standby_service.h"
 #include "board.h"
 #include "display.h"
 #include "display/lvgl_display/lvgl_theme.h"
@@ -79,6 +80,16 @@ pre{background:#0b1a2a;border-radius:10px;padding:10px;font-size:12px;overflow:a
 </div>
 
 <div class="card">
+  <div class="row"><label>待机页（时钟/天气/指数）</label>
+    <select id="standby"><option value="1">开启</option><option value="0">关闭</option></select>
+  </div>
+  <div class="row"><label>城市</label><input type="text" id="standby_city" placeholder="上海"></div>
+  <div class="row"><label>指数/个股</label></div>
+  <input type="text" id="standby_symbols" placeholder="sh000001,sz399001,sz399006">
+  <div class="tip">代码格式：sh000001 上证 / sz399001 深成 / hk00700 / usNVDA，逗号分隔最多 4 个</div>
+</div>
+
+<div class="card">
   <div class="row"><label>音乐服务地址</label></div>
   <input type="text" id="api" placeholder="http://47.116.199.150:2233">
   <div class="tip">改完保存立即生效（无需重启）</div>
@@ -117,6 +128,9 @@ function fill(s){
 
   if (s.led_color) $('led_color').value = s.led_color;
   if (s.api) $('api').value = s.api;
+  $('standby').value = String(s.standby ?? 1);
+  $('standby_city').value = s.standby_city || '上海';
+  $('standby_symbols').value = s.standby_symbols || 'sh000001,sz399001,sz399006';
   $('status').textContent = JSON.stringify(s, null, 1);
 }
 async function load(){
@@ -135,7 +149,10 @@ $('save').onclick = async () => {
     duck: +$('duck').value,
     led_mode: $('led_mode').value,
     led_color: $('led_color').value,
-    api: $('api').value.trim()
+    api: $('api').value.trim(),
+    standby: +$('standby').value,
+    standby_city: $('standby_city').value.trim(),
+    standby_symbols: $('standby_symbols').value.trim()
   };
   try{
     const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -215,6 +232,10 @@ std::string BuildStatusJson() {
                                                      led_settings.GetInt("status_enabled", 1)
                                                          ? "on" : "off").c_str());
     cJSON_AddStringToObject(root, "led_color", "#00b3ff");
+    auto& standby = StandbyService::GetInstance();
+    cJSON_AddNumberToObject(root, "standby", standby.enabled() ? 1 : 0);
+    cJSON_AddStringToObject(root, "standby_city", standby.city().c_str());
+    cJSON_AddStringToObject(root, "standby_symbols", standby.symbols().c_str());
     char* out = cJSON_PrintUnformatted(root);
     std::string json = out ? out : "{}";
     cJSON_free(out);
@@ -336,6 +357,25 @@ esp_err_t HandleSettings(httpd_req_t* req) {
     }
 
     auto* led_mode = cJSON_GetObjectItem(root, "led_mode");
+    auto* standby = cJSON_GetObjectItem(root, "standby");
+    auto* standby_city = cJSON_GetObjectItem(root, "standby_city");
+    auto* standby_symbols = cJSON_GetObjectItem(root, "standby_symbols");
+    if (cJSON_IsNumber(standby) || cJSON_IsString(standby_city) || cJSON_IsString(standby_symbols)) {
+        auto& svc = StandbyService::GetInstance();
+        if (cJSON_IsNumber(standby)) {
+            svc.SetEnabled(standby->valueint != 0);
+        }
+        if (cJSON_IsString(standby_city) && standby_city->valuestring[0]) {
+            svc.SetCity(standby_city->valuestring);
+        }
+        if (cJSON_IsString(standby_symbols) && standby_symbols->valuestring[0]) {
+            svc.SetSymbols(standby_symbols->valuestring);
+        }
+        svc.ReloadConfig();
+        ESP_LOGI(TAG, "standby -> %d city=%s symbols=%s", (int)svc.enabled(), svc.city().c_str(),
+                 svc.symbols().c_str());
+    }
+
     auto* led_color = cJSON_GetObjectItem(root, "led_color");
     if (auto* led = board.GetLed()) {
         if (cJSON_IsString(led_mode)) {

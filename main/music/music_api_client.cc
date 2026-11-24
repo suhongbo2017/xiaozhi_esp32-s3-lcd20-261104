@@ -301,3 +301,18 @@ bool MusicApiClient::StockSearch(const std::string& keyword, std::string* out_js
     }
     return true;
 }
+
+bool MusicApiClient::Standby(const std::string& city, const std::string& symbols,
+                            std::string* out_json) {
+    std::string body;
+    int status = HttpGet("/standby?city=" + UrlEncode(city) + "&symbols=" + UrlEncode(symbols), &body,
+                         15000);
+    if (status != 200) {
+        ESP_LOGW(TAG, "standby failed: http %d", status);
+        return false;
+    }
+    if (out_json) {
+        *out_json = body;
+    }
+    return true;
+}

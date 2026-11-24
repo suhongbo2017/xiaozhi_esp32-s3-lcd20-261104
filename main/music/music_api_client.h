@@ -61,6 +61,9 @@ public:
     bool StockQuote(const std::string& code, std::string* out_json);
     bool StockSearch(const std::string& keyword, std::string* out_json);
 
+    /** 待机页数据（天气 + 指数行情），服务端 5 分钟缓存 */
+    bool Standby(const std::string& city, const std::string& symbols, std::string* out_json);
+
     /** 重新读取 NVS 里的 api_url/api_secret（网页改地址后调用，无需重启） */
     void Reload();
 

@@ -43,6 +43,8 @@ set(SOURCES "audio/audio_codec.cc"
             "market/stock_tools.cc"
             "web/admin_server.cc"
             "web/asset_ota.cc"
+            "ui/standby_page.cc"
+            "ui/standby_service.cc"
             "system_info.cc"
             "application.cc"
             "ota.cc"
@@ -52,7 +54,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "music" "market" "web" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+set(INCLUDE_DIRS "." "display" "music" "market" "web" "ui" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
 # Add board common files
 list(APPEND SOURCES

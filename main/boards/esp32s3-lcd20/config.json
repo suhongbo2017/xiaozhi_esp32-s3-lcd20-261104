@@ -5,7 +5,9 @@
         {
             "name": "esp32s3-lcd20",
             "sdkconfig_append": [
-                "CONFIG_LCD_ST7789_240X320=y"
+                "CONFIG_LCD_ST7789_240X320=y",
+                "CONFIG_LV_FONT_MONTSERRAT_48=y",
+                "CONFIG_LV_FONT_MONTSERRAT_24=y"
             ]
         }
     ]
