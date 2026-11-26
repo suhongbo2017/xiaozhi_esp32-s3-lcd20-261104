@@ -88,43 +88,38 @@ void McpServer::AddCommonTools() {
     auto led = board.GetLed();
     if (led != nullptr && led->SupportsColor()) {
         AddTool("self.led.set_color",
-            "Set the onboard RGB LED color. Provide r/g/b in 0-255. "
-            "Note: the LED is also used as a status light, so the next device state change "
-            "(listening/speaking/idle) will override this color.",
+            "Set the onboard RGB LED to a fixed color (r/g/b 0-255). The LED will keep this "
+            "color and ignore device state changes until the user switches back to follow mode. "
+            "Use it for \"turn the light red\" style requests.",
             PropertyList({
                 Property("r", kPropertyTypeInteger, 0, 255),
                 Property("g", kPropertyTypeInteger, 0, 255),
                 Property("b", kPropertyTypeInteger, 0, 255),
             }),
             [led](const PropertyList& properties) -> ReturnValue {
-                /* 手动设色：同时关闭"状态灯自动模式"，否则下一次对话状态变化会把颜色改掉 */
-                led->SetStatusEnabled(false);
-                led->SetColor(static_cast<uint8_t>(properties["r"].value<int>()),
-                              static_cast<uint8_t>(properties["g"].value<int>()),
-                              static_cast<uint8_t>(properties["b"].value<int>()));
-                led->TurnOn();
-                return true;
+                led->SetFixedColor(static_cast<uint8_t>(properties["r"].value<int>()),
+                                   static_cast<uint8_t>(properties["g"].value<int>()),
+                                   static_cast<uint8_t>(properties["b"].value<int>()));
+                led->SetMode(Led::Mode::Fixed);
+                return std::string("LED 已设为固定颜色");
             });
 
         AddTool("self.led.turn_on",
-            "Turn the onboard RGB LED on (it will be lit white-ish at low brightness). "
-            "Use self.led.set_color to pick a color instead.",
+            "Turn the status LED back to automatic mode: it lights up according to device state "
+            "(listening/speaking/idle). Use self.led.set_color for a fixed color.",
             PropertyList(),
             [led](const PropertyList&) -> ReturnValue {
-                led->SetStatusEnabled(false);
-                led->SetColor(0, 0, 8);
-                led->TurnOn();
-                return true;
+                led->SetMode(Led::Mode::Follow);
+                return std::string("状态灯已恢复自动模式");
             });
 
         AddTool("self.led.turn_off",
-            "Turn off the onboard RGB LED. It will stay off until the next device state change.",
+            "Turn the status LED completely off. It stays off across device state changes until "
+            "the user turns it back on.",
             PropertyList(),
             [led](const PropertyList&) -> ReturnValue {
-                /* 先关掉状态灯自动模式，再熄灭；否则紧接着的状态变化会把它重新点亮 */
-                led->SetStatusEnabled(false);
-                led->TurnOff();
-                return true;
+                led->SetMode(Led::Mode::Off);
+                return std::string("状态灯已关闭");
             });
 
         AddTool("self.led.test",
@@ -132,9 +127,12 @@ void McpServer::AddCommonTools() {
             "2 rounds. Use it when the user reports the LED does not respond.",
             PropertyList(),
             [led](const PropertyList&) -> ReturnValue {
-                led->SetStatusEnabled(false);
+                /* 自检时临时切到 Fixed（不跟随状态），测完恢复原来的模式 */
+                static Led::Mode prev_mode = Led::Mode::Follow;
                 static esp_timer_handle_t timer = nullptr;
                 static int step = 0;
+                prev_mode = led->GetMode();
+                led->SetMode(Led::Mode::Fixed);
                 if (timer == nullptr) {
                     esp_timer_create_args_t args = {
                         .callback =
@@ -145,7 +143,10 @@ void McpServer::AddCommonTools() {
                                     case 0: l->SetColor(64, 0, 0); l->TurnOn(); break;
                                     case 1: l->SetColor(0, 64, 0); l->TurnOn(); break;
                                     case 2: l->SetColor(0, 0, 64); l->TurnOn(); break;
-                                    default: l->TurnOff(); break;
+                                    default:
+                                        l->TurnOff();
+                                        l->SetMode(prev_mode);   /* 测完恢复用户设置 */
+                                        break;
                                 }
                                 ESP_LOGW(TAG, "LED test step %d", s);
                             },

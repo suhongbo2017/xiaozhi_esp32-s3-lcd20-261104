@@ -17,6 +17,12 @@ public:
 
     void OnStateChanged() override;
 
+    /* 模式：Follow / Off / Fixed（NVS 持久化：led/mode、led/color） */
+    void SetMode(Mode mode) override;
+    Mode GetMode() const override { return mode_; }
+    void SetFixedColor(uint8_t r, uint8_t g, uint8_t b) override;
+    void GetFixedColor(uint8_t* r, uint8_t* g, uint8_t* b) const override;
+
     /* 手动控制（MCP self.led.* 用）。注意：下一次设备状态变化会覆盖手动颜色 */
     bool SupportsColor() const override { return true; }
     void SetStatusEnabled(bool enabled) override;
@@ -26,7 +32,11 @@ public:
     void TurnOff() override;
 
 private:
-    bool status_enabled_ = true;   /* false = 不再跟随设备状态点灯（用户手动控制） */
+    Mode mode_ = Mode::Follow;      /* 当前模式 */
+    bool status_enabled_ = true;    /* 兼容旧字段：等于 mode_ == Follow */
+    uint8_t fixed_r_ = 0;           /* Fixed 模式的固定颜色 */
+    uint8_t fixed_g_ = 0;
+    uint8_t fixed_b_ = 0;
     std::mutex mutex_;
     TaskHandle_t blink_task_ = nullptr;
     led_strip_handle_t led_strip_ = nullptr;
@@ -35,6 +45,8 @@ private:
     int blink_interval_ms_ = 0;
     esp_timer_handle_t blink_timer_ = nullptr;
 
+    void ApplyMode();               /* 按当前模式立刻刷新输出 */
+    void SaveMode();                /* 写 NVS */
     void StartBlinkTask(int times, int interval_ms);
     void OnBlinkTimer();
 

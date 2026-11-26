@@ -676,11 +676,27 @@ std::string BuildStatusJson() {
     cJSON_AddNumberToObject(root, "volume", volume);
     cJSON_AddNumberToObject(root, "duck", music.GetInt("duck_volume_percent", CONFIG_MUSIC_DUCK_VOLUME_PERCENT));
     cJSON_AddStringToObject(root, "api", music.GetString("api_url", CONFIG_MUSIC_API_URL).c_str());
-    cJSON_AddStringToObject(root, "led_mode",
-                             led_settings.GetString("mode",
-                                                     led_settings.GetInt("status_enabled", 1)
-                                                         ? "on" : "off").c_str());
-    cJSON_AddStringToObject(root, "led_color", "#00b3ff");
+    /* 状态灯：以 Led 对象为准（NVS 只是持久化副本） */
+    const char* led_mode_str = "on";
+    char led_color_hex[8] = "#00b3ff";
+    if (auto* led = board.GetLed()) {
+        switch (led->GetMode()) {
+            case Led::Mode::Off:
+                led_mode_str = "off";
+                break;
+            case Led::Mode::Fixed:
+                led_mode_str = "color";
+                break;
+            default:
+                led_mode_str = "on";
+                break;
+        }
+        uint8_t lr = 0, lg = 0, lb = 255;
+        led->GetFixedColor(&lr, &lg, &lb);
+        snprintf(led_color_hex, sizeof(led_color_hex), "#%02X%02X%02X", lr, lg, lb);
+    }
+    cJSON_AddStringToObject(root, "led_mode", led_mode_str);
+    cJSON_AddStringToObject(root, "led_color", led_color_hex);
     auto& app = Application::GetInstance();
     cJSON_AddNumberToObject(root, "wake_enabled", app.WakeWordEnabled() ? 1 : 0);
     cJSON_AddNumberToObject(root, "wake_threshold", (int)(app.WakeWordThreshold() * 100 + 0.5f));
@@ -1132,27 +1148,22 @@ esp_err_t HandleSettings(httpd_req_t* req) {
 
     auto* led_color = cJSON_GetObjectItem(root, "led_color");
     if (auto* led = board.GetLed()) {
+        /* 先同步固定颜色，再切模式；两边都由 Led 自己写 NVS，避免键不一致 */
+        if (cJSON_IsString(led_color)) {
+            uint8_t r = 0, g = 0, b = 255;
+            HexToRgb(led_color->valuestring, &r, &g, &b);
+            led->SetFixedColor(r, g, b);
+        }
         if (cJSON_IsString(led_mode)) {
             std::string mode = led_mode->valuestring;
-            if (mode != "on" && mode != "off" && mode != "color") {
-                mode = "on";
-            }
-            Settings("led", true).SetString("mode", mode);
             if (mode == "off") {
-                led->SetStatusEnabled(false);
-                led->TurnOff();
+                led->SetMode(Led::Mode::Off);
             } else if (mode == "color") {
-                uint8_t r = 0, g = 0, b = 255;
-                if (cJSON_IsString(led_color)) {
-                    HexToRgb(led_color->valuestring, &r, &g, &b);
-                }
-                led->SetStatusEnabled(false);
-                led->SetColor(r, g, b);
-                led->TurnOn();
+                led->SetMode(Led::Mode::Fixed);
             } else {
-                led->SetStatusEnabled(true);
+                led->SetMode(Led::Mode::Follow);
             }
-            ESP_LOGI(TAG, "led mode -> %s", mode.c_str());
+            ESP_LOGI(TAG, "led -> %s (mode=%d)", mode.c_str(), (int)led->GetMode());
         }
     }
 

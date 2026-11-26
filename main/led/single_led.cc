@@ -1,7 +1,8 @@
 #include "single_led.h"
 #include "application.h"
 #include "settings.h"
-#include <esp_log.h> 
+#include <esp_log.h>
+#include <cstdio> 
 
 #define TAG "SingleLed"
 
@@ -32,10 +33,30 @@ SingleLed::SingleLed(gpio_num_t gpio) {
 
     {
         Settings settings("led", false);
-        status_enabled_ = settings.GetInt("status_enabled", 1) != 0;
-        if (!status_enabled_) {
-            ESP_LOGI(TAG, "status LED disabled by user setting");
+        /* mode 优先；没有 mode 时按旧的 status_enabled 兼容 */
+        std::string mode = settings.GetString("mode", "");
+        if (mode == "off") {
+            mode_ = Mode::Off;
+        } else if (mode == "color" || mode == "fixed") {
+            mode_ = Mode::Fixed;
+        } else if (mode == "on" || mode == "follow") {
+            mode_ = Mode::Follow;
+        } else {
+            mode_ = settings.GetInt("status_enabled", 1) != 0 ? Mode::Follow : Mode::Off;
         }
+        status_enabled_ = (mode_ == Mode::Follow);
+
+        /* 固定颜色："#RRGGBB" */
+        std::string color = settings.GetString("color", "");
+        if (color.size() == 7 && color[0] == '#') {
+            unsigned int v = 0;
+            if (sscanf(color.c_str() + 1, "%06x", &v) == 1) {
+                fixed_r_ = (v >> 16) & 0xFF;
+                fixed_g_ = (v >> 8) & 0xFF;
+                fixed_b_ = v & 0xFF;
+            }
+        }
+        ESP_LOGI(TAG, "led mode=%d color=#%02X%02X%02X", (int)mode_, fixed_r_, fixed_g_, fixed_b_);
     }
 
     esp_timer_create_args_t blink_timer_args = {
@@ -92,18 +113,73 @@ void SingleLed::TurnOff() {
 }
 
 void SingleLed::SetStatusEnabled(bool enabled) {
+    /* 兼容旧接口：true=跟随状态，false=常灭 */
+    SetMode(enabled ? Mode::Follow : Mode::Off);
+}
+
+void SingleLed::SaveMode() {
+    Settings settings("led", true);
+    switch (mode_) {
+        case Mode::Off:
+            settings.SetString("mode", "off");
+            break;
+        case Mode::Fixed:
+            settings.SetString("mode", "color");
+            break;
+        default:
+            settings.SetString("mode", "on");
+            break;
+    }
+    /* 兼容旧字段 */
+    settings.SetInt("status_enabled", mode_ == Mode::Follow ? 1 : 0);
+    char hex[8];
+    snprintf(hex, sizeof(hex), "#%02X%02X%02X", fixed_r_, fixed_g_, fixed_b_);
+    settings.SetString("color", hex);
+}
+
+void SingleLed::SetMode(Mode mode) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (status_enabled_ == enabled) {
-            return;
-        }
-        status_enabled_ = enabled;
+        mode_ = mode;
+        status_enabled_ = (mode == Mode::Follow);
     }
-    Settings settings("led", true);
-    settings.SetInt("status_enabled", enabled ? 1 : 0);
-    ESP_LOGI(TAG, "status LED auto mode -> %s", enabled ? "on" : "off");
-    if (!enabled) {
-        TurnOff();
+    SaveMode();
+    ESP_LOGI(TAG, "led mode -> %s", mode == Mode::Off ? "off"
+                                 : (mode == Mode::Fixed ? "fixed color" : "follow"));
+    ApplyMode();
+}
+
+void SingleLed::SetFixedColor(uint8_t r, uint8_t g, uint8_t b) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fixed_r_ = r;
+        fixed_g_ = g;
+        fixed_b_ = b;
+    }
+    SaveMode();
+    if (GetMode() == Mode::Fixed) {
+        ApplyMode();
+    }
+}
+
+void SingleLed::GetFixedColor(uint8_t* r, uint8_t* g, uint8_t* b) const {
+    if (r) *r = fixed_r_;
+    if (g) *g = fixed_g_;
+    if (b) *b = fixed_b_;
+}
+
+void SingleLed::ApplyMode() {
+    switch (GetMode()) {
+        case Mode::Off:
+            TurnOff();
+            break;
+        case Mode::Fixed:
+            SetColor(fixed_r_, fixed_g_, fixed_b_);
+            TurnOn();
+            break;
+        default:
+            OnStateChanged();
+            break;
     }
 }
 
@@ -149,8 +225,13 @@ void SingleLed::OnBlinkTimer() {
 
 
 void SingleLed::OnStateChanged() {
-    if (!status_enabled_) {
-        TurnOff();   /* 用户已手动关闭状态灯：任何状态变化都不再点灯 */
+    if (mode_ == Mode::Off) {
+        TurnOff();   /* 常灭：任何状态变化都不点灯 */
+        return;
+    }
+    if (mode_ == Mode::Fixed) {
+        SetColor(fixed_r_, fixed_g_, fixed_b_);   /* 固定颜色：状态变化不改变颜色 */
+        TurnOn();
         return;
     }
     auto& app = Application::GetInstance();
