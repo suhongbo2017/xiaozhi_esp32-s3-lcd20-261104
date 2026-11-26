@@ -40,11 +40,46 @@ const FixedPin kFixedReserved[] = {
     {36, "闪存"}, {37, "闪存"},
 };
 
+std::string Normalize(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (unsigned char c : in) {
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '"') {
+            continue;
+        }
+        out.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return out;
+}
+
 int FindIndex(const std::string& key) {
-    /* 支持按名称或序号（1 开始）控制 */
+    /* 1) 精确名称 */
     for (size_t i = 0; i < g_devices.size(); i++) {
         if (g_devices[i].name == key) {
             return static_cast<int>(i);
+        }
+    }
+    /* 2) 归一化后完全相同（忽略空格/引号/大小写） */
+    const std::string nkey = Normalize(key);
+    for (size_t i = 0; i < g_devices.size(); i++) {
+        if (Normalize(g_devices[i].name) == nkey) {
+            return static_cast<int>(i);
+        }
+    }
+    /* 3) 互相包含："打印机灯" / "打印机灯光" 都能命中 */
+    if (nkey.size() >= 2) {
+        int hit = -1;
+        for (size_t i = 0; i < g_devices.size(); i++) {
+            const std::string name = Normalize(g_devices[i].name);
+            if (name.find(nkey) != std::string::npos || nkey.find(name) != std::string::npos) {
+                if (hit >= 0) {
+                    return -1;   /* 多个都能对上，宁可不猜 */
+                }
+                hit = static_cast<int>(i);
+            }
+        }
+        if (hit >= 0) {
+            return hit;
         }
     }
     if (!key.empty() && key.size() <= 2 && key[0] >= '1' && key[0] <= '9') {
@@ -306,6 +341,8 @@ bool GpioControl::Save(const std::vector<GpioSwitchConfig>& devices, std::string
         Settings("gpio", true).SetString("config", SerializeConfig(g_devices));
     }
     ESP_LOGI(TAG, "saved %d gpio switch(es)", (int)devices.size());
+    /* 配置变了：重建每路独立工具（无需重启） */
+    GpioControl::GetInstance().RebuildPerDeviceTools();
     return true;
 }
 
@@ -418,4 +455,65 @@ void GpioControl::RegisterMcpTools() {
         });
 
     ESP_LOGI(TAG, "mcp tools registered (self.gpio.list / self.gpio.set)");
+}
+
+void GpioControl::RebuildPerDeviceTools() {
+    /* 先把上一批 self.gpio.sw* 工具摘掉，再按当前配置重建 */
+    auto& mcp = McpServer::GetInstance();
+    mcp.RemoveToolsWithPrefix("self.gpio.sw");
+
+    std::vector<GpioSwitchConfig> devices;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        devices = g_devices;
+    }
+
+    for (size_t i = 0; i < devices.size(); i++) {
+        const std::string idx = std::to_string(i + 1);
+        const std::string name = devices[i].name;
+        const int gpio = devices[i].gpio;
+        const bool on = [&] {
+            bool v = false;
+            GetState(name, &v);
+            return v;
+        }();
+
+        /* 名称写进描述，模型不需要先 list 就能一步调用 */
+        char on_desc[192];
+        snprintf(on_desc, sizeof(on_desc), "打开「%s」（GPIO%d，当前%s）。用户说“打开%s”“把%s打开”时调用。",
+                 name.c_str(), gpio, on ? "开" : "关", name.c_str(), name.c_str());
+        char off_desc[192];
+        snprintf(off_desc, sizeof(off_desc), "关闭「%s」（GPIO%d，当前%s）。用户说“关掉%s”“把%s关了”时调用。",
+                 name.c_str(), gpio, on ? "开" : "关", name.c_str(), name.c_str());
+        char st_desc[160];
+        snprintf(st_desc, sizeof(st_desc), "查询「%s」（GPIO%d）当前是开还是关。", name.c_str(), gpio);
+
+        const std::string tool_on = "self.gpio.sw" + idx + "_on";
+        const std::string tool_off = "self.gpio.sw" + idx + "_off";
+        const std::string tool_state = "self.gpio.sw" + idx + "_state";
+        const std::string dev_name = name;
+
+        mcp.AddTool(tool_on, on_desc, PropertyList(), [dev_name](const PropertyList&) -> ReturnValue {
+            std::string msg;
+            GpioControl::GetInstance().SetByState(dev_name, "on", &msg);
+            return msg;
+        });
+        mcp.AddTool(tool_off, off_desc, PropertyList(), [dev_name](const PropertyList&) -> ReturnValue {
+            std::string msg;
+            GpioControl::GetInstance().SetByState(dev_name, "off", &msg);
+            return msg;
+        });
+        mcp.AddTool(tool_state, st_desc, PropertyList(), [dev_name](const PropertyList&) -> ReturnValue {
+            bool v = false;
+            if (!GpioControl::GetInstance().GetState(dev_name, &v)) {
+                return std::string("没有这个开关：") + dev_name;
+            }
+            return std::string(dev_name) + (v ? " 现在是开着的。" : " 现在是关着的。");
+        });
+    }
+
+    if (!devices.empty()) {
+        ESP_LOGI(TAG, "per-device tools rebuilt: %d switch(es) -> %d tools", (int)devices.size(),
+                 (int)devices.size() * 3);
+    }
 }

@@ -3,6 +3,7 @@
 #include "audio_codec.h"
 #include "application.h"
 #include "device/gpio_control.h"
+#include "mcp_server.h"
 #include "asset_ota.h"
 #include "ui/standby_service.h"
 #include "ui/user_image.h"
@@ -67,6 +68,20 @@ pre{background:#0b1a2a;border-radius:10px;padding:10px;font-size:12px;overflow:a
 .btnrow{display:flex;gap:8px}
 .btnrow button{flex:1}
 button.ghost{background:#1b3350;color:#cfe3f7}
+.dev-card{background:#14263b;border:1px solid #22405e;border-radius:14px;padding:14px;margin:12px 0}
+.dev-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.dev-name{font-size:17px;font-weight:700}
+.dev-sub{color:#8fa6bf;font-size:12px;margin-top:4px}
+.sw{width:58px;height:32px;border-radius:16px;background:#2b4d70;position:relative;cursor:pointer;
+    transition:background .18s;flex:0 0 auto;border:none;padding:0}
+.sw.on{background:#37e39b}
+.sw::after{content:'';position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;
+    background:#fff;transition:left .18s}
+.sw.on::after{left:29px}
+.dev-actions{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+.dev-state{font-size:13px}
+.dev-state.on{color:#37e39b}.dev-state.off{color:#8fa6bf}
+.btn-del{background:#3a2028;color:#ff9a9a;border:none;border-radius:10px;padding:8px 14px;font-size:13px;width:auto;margin:0}
 .modal{position:fixed;inset:0;background:rgba(4,10,18,.86);display:none;align-items:center;justify-content:center;z-index:50;padding:14px}
 .modal.on{display:flex}
 .modal-box{background:#12253c;border:1px solid #24425f;border-radius:16px;padding:14px;width:100%;max-width:340px}
@@ -230,6 +245,17 @@ button.ghost{background:#1b3350;color:#cfe3f7}
 <button id="save">保存并应用</button>
 <div class="tip" id="msg"></div>
 
+<div class="modal" id="del_modal">
+  <div class="modal-box">
+    <div class="modal-title">删除开关</div>
+    <div class="tip" id="del_text">确定要删除这个开关吗？</div>
+    <div class="btnrow" style="margin-top:14px">
+      <button class="ghost" onclick="delCancel()">取消</button>
+      <button id="del_ok" style="background:#ff6b6b">确认删除</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="crop_modal">
   <div class="modal-box">
     <div class="modal-title">裁切图片 · <span id="crop_title">-</span></div>
@@ -281,37 +307,53 @@ let gpioDevices = [], gpioReserved = [], gpioUsed = [], gpioAvailable = [];
 
 function renderGpio(){
   const box = $('gpio_list');
-  if (!gpioDevices.length){ box.textContent = '还没有配置任何开关'; }
-  else {
-    box.innerHTML = '';
+  box.innerHTML = '';
+  if (!gpioDevices.length){
+    const empty = document.createElement('div');
+    empty.className = 'tip';
+    empty.textContent = '还没有配置任何开关（下面可以添加）';
+    box.appendChild(empty);
+  } else {
     gpioDevices.forEach((d, i) => {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.style.padding = '8px 0';
-      row.style.borderBottom = '1px solid #1e3a58';
-      const label = document.createElement('label');
-      label.innerHTML = '<b>'+d.name+'</b><br><span class="tip">GPIO'+d.gpio
-        + (d.active_high?'':' · 低电平') + ' · '+(d.on?'开':'关')+'</span>';
-      const btns = document.createElement('div');
-      btns.style.display = 'flex'; btns.style.gap = '6px';
-      const mk = (txt, state, bg) => {
-        const b = document.createElement('button');
-        b.textContent = txt; b.style.margin = '0'; b.style.padding = '8px 12px';
-        b.style.width = 'auto'; b.style.background = bg;
-        b.onclick = () => gpioControl(d.name, state);
-        return b;
-      };
-      btns.appendChild(mk(d.on?'关':'开', d.on?'off':'on', d.on?'#ff7b7b':'#37e39b'));
-      btns.appendChild(mk('翻转', 'toggle', '#2b4d70'));
+      const card = document.createElement('div');
+      card.className = 'dev-card';
+
+      const top = document.createElement('div');
+      top.className = 'dev-top';
+
+      const left = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'dev-name';
+      name.textContent = d.name;
+      const sub = document.createElement('div');
+      sub.className = 'dev-sub';
+      sub.textContent = 'GPIO' + d.gpio + (d.active_high ? ' · 高电平触发' : ' · 低电平触发')
+        + (d.initial_on ? ' · 上电默认开' : '');
+      left.appendChild(name); left.appendChild(sub);
+
+      const sw = document.createElement('button');
+      sw.className = 'sw' + (d.on ? ' on' : '');
+      sw.title = d.on ? '点击关闭' : '点击打开';
+      sw.onclick = () => gpioControl(d.name, d.on ? 'off' : 'on');
+
+      top.appendChild(left); top.appendChild(sw);
+
+      const actions = document.createElement('div');
+      actions.className = 'dev-actions';
+      const st = document.createElement('span');
+      st.className = 'dev-state ' + (d.on ? 'on' : 'off');
+      st.textContent = d.on ? '● 已打开' : '○ 已关闭';
       const del = document.createElement('button');
-      del.textContent = '删'; del.className = 'ghost';
-      del.style.margin='0'; del.style.padding='8px 12px'; del.style.width='auto';
-      del.onclick = () => removeGpio(i);
-      btns.appendChild(del);
-      row.appendChild(label); row.appendChild(btns);
-      box.appendChild(row);
+      del.className = 'btn-del';
+      del.textContent = '删除';
+      del.onclick = () => delAsk(d.name);
+      actions.appendChild(st); actions.appendChild(del);
+
+      card.appendChild(top); card.appendChild(actions);
+      box.appendChild(card);
     });
   }
+
   /* 下拉框：只放当前可用的引脚 */
   const sel = $('g_pin');
   const prev = sel.value;
@@ -331,6 +373,27 @@ function renderGpio(){
   const notes = gpioUsed.map(u => 'GPIO' + u.gpio + ' · ' + u.reason);
   $('g_reserved').innerHTML = notes.length ? notes.join('<br>') : '（暂无）';
 }
+
+/* 删除二次确认 */
+let delTarget = null;
+function delAsk(name){
+  delTarget = name;
+  $('del_text').textContent = '确定要删除「' + name + '」吗？删除后引脚会恢复，语音也不能再控制它。';
+  $('del_modal').classList.add('on');
+}
+function delCancel(){
+  delTarget = null;
+  $('del_modal').classList.remove('on');
+}
+$('del_ok').onclick = () => {
+  const name = delTarget;
+  delCancel();
+  if (!name) return;
+  const devices = gpioDevices
+    .filter(d => d.name !== name)
+    .map(d => ({name:d.name, gpio:d.gpio, active_high:d.active_high, initial_on:d.initial_on}));
+  saveGpio(devices, '已删除「' + name + '」✓');
+};
 
 async function loadGpio(){
   try{
@@ -376,12 +439,6 @@ $('g_add').onclick = () => {
   saveGpio(devices, '已添加 ✓（现在可以直接说「打开'+name+'」）');
   $('g_name').value='';
 };
-
-function removeGpio(idx){
-  const devices = gpioDevices.map(d => ({name:d.name, gpio:d.gpio, active_high:d.active_high, initial_on:d.initial_on}));
-  devices.splice(idx,1);
-  saveGpio(devices, '已删除 ✓');
-}
 
 /* ---------------- 分类卡片：tab 切换 ---------------- */
 document.querySelectorAll('.tabs button').forEach(btn=>{
@@ -835,6 +892,22 @@ esp_err_t HandleImagePost(httpd_req_t* req) {
  * POST /api/gpio  {"devices":[{name,gpio,active_high,initial_on}]}  保存配置
  * POST /api/gpio  {"name":"打印机灯光","state":"on|off|toggle"}      即时控制
  */
+/* 诊断：当前注册给大模型的 MCP 工具列表 */
+esp_err_t HandleMcpTools(httpd_req_t* req) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON* arr = cJSON_AddArrayToObject(root, "tools");
+    for (const auto& name : McpServer::GetInstance().GetToolNames()) {
+        cJSON_AddItemToArray(arr, cJSON_CreateString(name.c_str()));
+    }
+    cJSON_AddNumberToObject(root, "count", cJSON_GetArraySize(arr));
+    char* out = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
+    cJSON_free(out);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
 esp_err_t HandleGpio(httpd_req_t* req) {
     auto& gpio = GpioControl::GetInstance();
     httpd_resp_set_type(req, "application/json");
@@ -1098,7 +1171,7 @@ bool AdminServer::Start() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 8080;
     config.ctrl_port = 32769;
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 20;   /* 现在有 11 个 URI（GET/POST 分开算），默认 8 不够 */
     config.lru_purge_enable = true;
     config.stack_size = 8192;
 
@@ -1113,20 +1186,28 @@ bool AdminServer::Start() {
     httpd_uri_t uri_assets = {.uri = "/api/assets", .method = HTTP_POST, .handler = HandleAssetsApply, .user_ctx = nullptr};
     httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
     httpd_uri_t uri_chat_test = {.uri = "/api/chat_test", .method = HTTP_POST, .handler = HandleChatTest, .user_ctx = nullptr};
+    httpd_uri_t uri_mcp_tools = {.uri = "/api/mcp_tools", .method = HTTP_GET, .handler = HandleMcpTools, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_get = {.uri = "/api/gpio", .method = HTTP_GET, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_post = {.uri = "/api/gpio", .method = HTTP_POST, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_image_get = {.uri = "/api/image", .method = HTTP_GET, .handler = HandleImageGet, .user_ctx = nullptr};
     httpd_uri_t uri_image_post = {.uri = "/api/image", .method = HTTP_POST, .handler = HandleImagePost, .user_ctx = nullptr};
-    httpd_register_uri_handler(g_server, &uri_root);
-    httpd_register_uri_handler(g_server, &uri_status);
-    httpd_register_uri_handler(g_server, &uri_settings);
-    httpd_register_uri_handler(g_server, &uri_assets);
-    httpd_register_uri_handler(g_server, &uri_reboot);
-    httpd_register_uri_handler(g_server, &uri_chat_test);
-    httpd_register_uri_handler(g_server, &uri_gpio_get);
-    httpd_register_uri_handler(g_server, &uri_gpio_post);
-    httpd_register_uri_handler(g_server, &uri_image_get);
-    httpd_register_uri_handler(g_server, &uri_image_post);
+    auto reg = [](httpd_uri_t* uri) {
+        esp_err_t err = httpd_register_uri_handler(g_server, uri);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "register %s failed: %s", uri->uri, esp_err_to_name(err));
+        }
+    };
+    reg(&uri_root);
+    reg(&uri_status);
+    reg(&uri_settings);
+    reg(&uri_assets);
+    reg(&uri_reboot);
+    reg(&uri_chat_test);
+    reg(&uri_mcp_tools);
+    reg(&uri_gpio_get);
+    reg(&uri_gpio_post);
+    reg(&uri_image_get);
+    reg(&uri_image_post);
     ESP_LOGI(TAG, "admin web: http://<device-ip>:8080/");
     return true;
 }

@@ -28,9 +28,7 @@ McpServer::McpServer() {
 }
 
 McpServer::~McpServer() {
-    for (auto tool : tools_) {
-        delete tool;
-    }
+    std::lock_guard<std::mutex> lock(tools_mutex_);
     tools_.clear();
 }
 
@@ -40,7 +38,12 @@ void McpServer::AddCommonTools() {
     // **重要** 为了提升响应速度，我们把常用的工具放在前面，利用 prompt cache 的特性。
 
     // Backup the original tools list and restore it after adding the common tools.
-    auto original_tools = std::move(tools_);
+    std::vector<std::shared_ptr<McpTool>> original_tools;
+    {
+        std::lock_guard<std::mutex> lock(tools_mutex_);
+        original_tools = std::move(tools_);
+        tools_.clear();
+    }
     auto& board = Board::GetInstance();
 
     // Do not add custom tools here.
@@ -274,6 +277,7 @@ void McpServer::AddCommonTools() {
 #endif
 
     // Restore the original tools list to the end of the tools list
+    std::lock_guard<std::mutex> lock(tools_mutex_);
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());
 }
 
@@ -450,14 +454,44 @@ void McpServer::AddUserOnlyTools() {
 }
 
 void McpServer::AddTool(McpTool* tool) {
+    std::lock_guard<std::mutex> lock(tools_mutex_);
     // Prevent adding duplicate tools
-    if (std::find_if(tools_.begin(), tools_.end(), [tool](const McpTool* t) { return t->name() == tool->name(); }) != tools_.end()) {
+    if (std::find_if(tools_.begin(), tools_.end(),
+                     [tool](const std::shared_ptr<McpTool>& t) { return t->name() == tool->name(); }) !=
+        tools_.end()) {
         ESP_LOGW(TAG, "Tool %s already added", tool->name().c_str());
+        delete tool;
         return;
     }
 
     ESP_LOGI(TAG, "Add tool: %s%s", tool->name().c_str(), tool->user_only() ? " [user]" : "");
-    tools_.push_back(tool);
+    tools_.push_back(std::shared_ptr<McpTool>(tool));
+}
+
+void McpServer::RemoveTool(const std::string& name) {
+    std::lock_guard<std::mutex> lock(tools_mutex_);
+    auto before = tools_.size();
+    tools_.erase(std::remove_if(tools_.begin(), tools_.end(),
+                                [&name](const std::shared_ptr<McpTool>& t) { return t->name() == name; }),
+                 tools_.end());
+    if (tools_.size() != before) {
+        ESP_LOGI(TAG, "Remove tool: %s", name.c_str());
+    }
+}
+
+int McpServer::RemoveToolsWithPrefix(const std::string& prefix) {
+    std::lock_guard<std::mutex> lock(tools_mutex_);
+    auto before = tools_.size();
+    tools_.erase(std::remove_if(tools_.begin(), tools_.end(),
+                                [&prefix](const std::shared_ptr<McpTool>& t) {
+                                    return t->name().compare(0, prefix.size(), prefix) == 0;
+                                }),
+                 tools_.end());
+    const int removed = static_cast<int>(before - tools_.size());
+    if (removed > 0) {
+        ESP_LOGI(TAG, "Remove %d tool(s) with prefix %s", removed, prefix.c_str());
+    }
+    return removed;
 }
 
 void McpServer::AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback) {
@@ -468,6 +502,16 @@ void McpServer::AddUserOnlyTool(const std::string& name, const std::string& desc
     auto tool = new McpTool(name, description, properties, callback);
     tool->set_user_only(true);
     AddTool(tool);
+}
+
+std::vector<std::string> McpServer::GetToolNames() const {
+    std::lock_guard<std::mutex> lock(tools_mutex_);
+    std::vector<std::string> names;
+    names.reserve(tools_.size());
+    for (const auto& t : tools_) {
+        names.push_back(t->name() + (t->user_only() ? " [user]" : ""));
+    }
+    return names;
 }
 
 void McpServer::ParseMessage(const std::string& message) {
@@ -603,6 +647,7 @@ void McpServer::ReplyError(int id, const std::string& message) {
 }
 
 void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_only_tools) {
+    std::lock_guard<std::mutex> lock(tools_mutex_);
     const int max_payload_size = 8000;
     std::string json = "{\"tools\":[";
     
@@ -659,19 +704,26 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
 }
 
 void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments) {
-    auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
-                                 [&tool_name](const McpTool* tool) { 
-                                     return tool->name() == tool_name; 
-                                 });
-    
+    std::shared_ptr<McpTool> tool;
+    {
+        std::lock_guard<std::mutex> lock(tools_mutex_);
+        auto it = std::find_if(tools_.begin(), tools_.end(),
+                               [&tool_name](const std::shared_ptr<McpTool>& t) {
+                                   return t->name() == tool_name;
+                               });
+        if (it != tools_.end()) {
+            tool = *it;
+        }
+    }
+
     ESP_LOGI(TAG, "MCP tools/call: %s", tool_name.c_str());
-    if (tool_iter == tools_.end()) {
+    if (!tool) {
         ESP_LOGE(TAG, "tools/call: Unknown tool: %s", tool_name.c_str());
         ReplyError(id, "Unknown tool: " + tool_name);
         return;
     }
 
-    PropertyList arguments = (*tool_iter)->properties();
+    PropertyList arguments = tool->properties();
     try {
         for (auto& argument : arguments) {
             bool found = false;
@@ -703,9 +755,9 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
 
     // Use main thread to call the tool
     auto& app = Application::GetInstance();
-    app.Schedule([this, id, tool_iter, arguments = std::move(arguments)]() {
+    app.Schedule([this, id, tool, arguments = std::move(arguments)]() {
         try {
-            ReplyResult(id, (*tool_iter)->Call(arguments));
+            ReplyResult(id, tool->Call(arguments));
         } catch (const std::exception& e) {
             ESP_LOGE(TAG, "tools/call: %s", e.what());
             ReplyError(id, e.what());

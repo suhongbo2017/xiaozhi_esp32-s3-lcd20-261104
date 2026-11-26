@@ -40,8 +40,11 @@ public:
     /** 形如 "打印机灯光(GPIO3)=开; 台灯(GPIO12)=关"，给大模型看的 */
     std::string Describe() const;
 
-    /** 注册 MCP 工具（幂等） */
+    /** 注册通用工具（幂等）：self.gpio.list / self.gpio.set */
     void RegisterMcpTools();
+
+    /** 按当前配置重建"每路独立工具"：self.gpio.sw{n}_on / _off / _state */
+    void RebuildPerDeviceTools();
 
     /** 引脚是否被板子占用；reason 返回原因 */
     bool IsReserved(int gpio, std::string* reason) const;

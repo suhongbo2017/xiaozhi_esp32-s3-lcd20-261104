@@ -2,6 +2,8 @@
 #define MCP_SERVER_H
 
 #include <string>
+#include <memory>
+#include <mutex>
 #include <vector>
 #include <map>
 #include <functional>
@@ -321,8 +323,15 @@ public:
     void AddCommonTools();
     void AddUserOnlyTools();
     void AddTool(McpTool* tool);
+    /** 按名字移除工具（动态重建用；不影响正在执行的调用） */
+    void RemoveTool(const std::string& name);
+    /** 移除某个前缀的所有工具，返回移除数量 */
+    int RemoveToolsWithPrefix(const std::string& prefix);
     void AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
     void AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
+    /** 当前注册的工具名（按注册顺序），供 /api/mcp_tools 诊断 */
+    std::vector<std::string> GetToolNames() const;
+
     void ParseMessage(const cJSON* json);
     void ParseMessage(const std::string& message);
 
@@ -338,7 +347,10 @@ private:
     void GetToolsList(int id, const std::string& cursor, bool list_user_only_tools);
     void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments);
 
-    std::vector<McpTool*> tools_;
+    /* 用 shared_ptr 持有：工具可能在一次调用的调度期间被移除，
+     * shared_ptr 保证回调不会踩到已释放的对象 */
+    std::vector<std::shared_ptr<McpTool>> tools_;
+    mutable std::mutex tools_mutex_;
 };
 
 #endif // MCP_SERVER_H
