@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>小智设备管理</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="hdr">
+  <div>
+    <div class="hdr-title">小智设备管理</div>
+    <div class="hdr-sub" id="devline">连接中…</div>
+  </div>
+  <div class="dot" id="online" title="设备状态"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="on" data-tab="screen">屏幕<small>主题 亮度 聊天</small></button>
+  <button data-tab="pic">图片<small>开机图 背景 字体</small></button>
+  <button data-tab="audio">声音<small>音量 唤醒词</small></button>
+  <button data-tab="ctrl">控制<small>状态灯 开关</small></button>
+  <button data-tab="sys">系统<small>服务 诊断</small></button>
+</nav>
+
+<main>
+
+<!-- ================= 屏幕 ================= -->
+<section class="pane on" id="pane-screen">
+  <div class="card">
+    <h2>显示</h2>
+    <div class="row"><label>主题</label>
+      <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select>
+    </div>
+    <div class="row"><label>屏幕亮度 <b class="val" id="bv">-</b></label></div>
+    <input type="range" id="brightness" min="0" max="100" step="1">
+  </div>
+
+  <div class="card">
+    <h2>聊天样式</h2>
+    <div class="styles" id="styles"></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">样式只影响气泡的配色、圆角、头像和小尾巴；字体大小由「图片」页的资源包决定。
+        自定义聊天背景图在「图片」页上传，会自动压暗 40% 保证文字可读。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>待机页</h2>
+    <div class="row"><label>显示待机页</label>
+      <label class="sw"><input type="checkbox" id="standby_on"><i></i></label>
+    </div>
+    <div class="row"><label>城市</label><input type="text" id="standby_city" placeholder="上海"></div>
+    <div class="row"><label>指数 / 个股</label></div>
+    <input type="text" id="standby_symbols" placeholder="usIXIC,usINX,sh000001">
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">城市支持：上海 北京 深圳 广州 杭州 成都 武汉 西安 南京 重庆 苏州 天津 长沙 青岛 厦门。<br>
+        指数代码：usIXIC 纳指 / usINX 标普 / usDJI 道指 / sh000001 上证 / sz399001 深成 / hk00700 港股 / usNVDA 美股，逗号分隔最多 4 个。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>设备屏幕预览</h2>
+    <div class="mock-wrap"><div class="mock" id="mock"></div></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">这是网页按当前设置模拟出来的 240×320 预览，不是真实截图。真实效果请以设备屏幕为准。</div>
+    </details>
+  </div>
+</section>
+
+<!-- ================= 图片 ================= -->
+<section class="pane" id="pane-pic">
+  <div class="card">
+    <h2>开机图片</h2>
+    <div class="thumb" id="boot_box">未设置</div>
+    <div class="btnrow">
+      <button class="ghost" onclick="pickImage('boot')">选择图片</button>
+      <button class="danger" onclick="clearImage('boot')">清除</button>
+    </div>
+    <input type="file" id="boot_file" accept="image/*" hidden>
+    <div class="tip" id="boot_msg"></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">开机显示约 2 秒后自动消失。建议选简洁的图（Logo/纯色），文字太多在 2 秒内看不清。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>待机背景图</h2>
+    <div class="thumb" id="bg_box">未设置</div>
+    <div class="btnrow">
+      <button class="ghost" onclick="pickImage('bg')">选择图片</button>
+      <button class="danger" onclick="clearImage('bg')">清除</button>
+    </div>
+    <input type="file" id="bg_file" accept="image/*" hidden>
+    <div class="tip" id="bg_msg"></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">只在待机页（时钟/天气/指数）显示，文字下方自动加 43% 黑色遮罩。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>聊天背景图</h2>
+    <div class="thumb" id="chat_box">未设置</div>
+    <div class="btnrow">
+      <button class="ghost" onclick="pickImage('chat')">选择图片</button>
+      <button class="danger" onclick="clearImage('chat')">清除</button>
+    </div>
+    <input type="file" id="chat_file" accept="image/*" hidden>
+    <div class="tip" id="chat_msg"></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">显示在聊天气泡后面，自动压暗 40%。建议选低对比度、颜色柔和的图，否则文字难读。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>字体 / 表情资源包</h2>
+    <div class="row"><label>资源包</label>
+      <select id="variant">
+        <option value="a20_e64">20px 字体 + 64px 表情</option>
+        <option value="a16_e32">16px 字体 + 32px 表情</option>
+        <option value="a30_e64">30px 字体 + 64px 表情</option>
+      </select>
+    </div>
+    <button id="applyAssets" class="warn">应用并重启</button>
+    <div class="tip" id="amsg"></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">会下载资源包写入设备并自动重启（5~20 秒）。不会影响上面三张图片。</div>
+    </details>
+  </div>
+</section>
+
+<!-- ================= 声音 ================= -->
+<section class="pane" id="pane-audio">
+  <div class="card">
+    <h2>音量</h2>
+    <div class="row"><label>音量 <b class="val" id="vv">-</b></label></div>
+    <input type="range" id="volume" min="0" max="100" step="1">
+    <div class="row"><label>音乐播放时压低到 <b class="val" id="dv">-</b></label></div>
+    <input type="range" id="duck" min="30" max="100" step="5">
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">播放音乐时会自动把音量降到设定比例，方便用唤醒词打断。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>唤醒词 <span class="tag" id="ww_name"></span></h2>
+    <div class="row"><label>唤醒词检测</label>
+      <label class="sw"><input type="checkbox" id="wake_on"><i></i></label>
+    </div>
+    <div class="row"><label>灵敏度 <b class="val" id="wtv">-</b></label></div>
+    <input type="range" id="wake_threshold" min="40" max="99" step="1">
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">数值越小越容易唤醒（也越容易误唤醒）。关闭唤醒词后只能用 BOOT 键开始/结束说话。
+        唤醒词内容由模型决定，换词需要更换资源包。</div>
+    </details>
+  </div>
+</section>
+
+<!-- ================= 控制 ================= -->
+<section class="pane" id="pane-ctrl">
+  <div class="card">
+    <h2>状态灯</h2>
+    <div class="row"><label>模式</label>
+      <select id="led_mode">
+        <option value="on">跟随设备状态</option>
+        <option value="off">常灭</option>
+        <option value="color">固定颜色</option>
+      </select>
+    </div>
+    <div class="row"><label>固定颜色</label><input type="color" id="led_color" value="#00b3ff"></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">跟随状态：空闲灭 / 聆听红 / 说话绿。固定颜色：任何状态变化都保持该颜色。常灭：一直不亮。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>我的开关 <span class="tag" id="gpio_count"></span></h2>
+    <div id="gpio_list"></div>
+    <details class="note"><summary>说明</summary>
+      <div class="note-body">配置后可语音控制，例如「打开打印机灯光」。继电器模块多为低电平触发，选错会出现"说开反而关"。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>新增开关</h2>
+    <div class="row"><label>名称</label><input type="text" id="g_name" placeholder="打印机灯光"></div>
+    <div class="row"><label>GPIO</label>
+      <select id="g_pin"><option value="">加载中…</option></select>
+    </div>
+    <div class="row"><label>触发电平</label>
+      <select id="g_active"><option value="1">高电平点亮</option><option value="0">低电平点亮</option></select>
+    </div>
+    <div class="row"><label>上电状态</label>
+      <select id="g_init"><option value="0">关闭</option><option value="1">打开</option></select>
+    </div>
+    <button id="g_add">添加这一路</button>
+    <div class="tip" id="g_msg"></div>
+    <details class="note"><summary>已被占用的引脚</summary>
+      <div class="note-body scroll" id="g_reserved">加载中…</div>
+    </details>
+  </div>
+</section>
+
+<!-- ================= 系统 ================= -->
+<section class="pane" id="pane-sys">
+  <div class="card">
+    <h2>音乐服务</h2>
+    <div class="row"><label>服务地址</label></div>
+    <input type="text" id="api" placeholder="http://47.116.199.150:2233">
+    <div class="tip">修改后立即生效，无需重启</div>
+  </div>
+
+  <div class="card">
+    <h2>设备状态</h2>
+    <div class="kv" id="status_kv"></div>
+  </div>
+
+  <div class="card">
+    <h2>诊断</h2>
+    <div class="btnrow">
+      <button class="ghost" onclick="chatTest()">预览聊天气泡</button>
+      <button class="ghost" onclick="showTools()">MCP 工具</button>
+    </div>
+    <div class="tip scroll" id="diag"></div>
+  </div>
+
+  <div class="card">
+    <h2>重启</h2>
+    <button class="danger" onclick="reboot()">重启设备</button>
+    <div class="tip">约 8 秒后恢复；开机图片改动需要重启才能看到</div>
+  </div>
+</section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal" id="crop_modal">
+  <div class="modal-box">
+    <h3>裁切 · <span id="crop_title">-</span></h3>
+    <div class="crop-wrap"><canvas id="crop_canvas" width="240" height="320"></canvas></div>
+    <div class="row"><label>缩放 <b class="val" id="crop_zv">100</b></label></div>
+    <input type="range" id="crop_zoom" min="100" max="400" step="5" value="100">
+    <div class="tip">拖动图片调整位置，框内即屏幕最终效果（240×320）</div>
+    <div class="btnrow">
+      <button class="ghost" onclick="cropCancel()">取消</button>
+      <button class="ghost" onclick="cropReset()">复位</button>
+    </div>
+    <button id="crop_ok">确认并上传</button>
+    <div class="tip" id="crop_msg"></div>
+  </div>
+</div>
+
+<div class="modal" id="del_modal">
+  <div class="modal-box">
+    <h3>删除开关</h3>
+    <div class="tip" id="del_text"></div>
+    <div class="btnrow">
+      <button class="ghost" onclick="delCancel()">取消</button>
+      <button class="danger" onclick="delConfirm()">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

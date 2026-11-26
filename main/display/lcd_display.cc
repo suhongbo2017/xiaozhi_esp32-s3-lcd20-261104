@@ -3,6 +3,7 @@
 #include "gif/lvgl_gif.h"
 #include "lvgl_theme.h"
 #include "settings.h"
+#include "ui/user_image.h"
 
 #include <esp_err.h>
 #include <esp_log.h>
@@ -466,8 +467,16 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_flex_grow(content_, 1);
     lv_obj_set_style_pad_all(content_, lvgl_theme->spacing(4), 0);
     lv_obj_set_style_border_width(content_, 0, 0);
-    lv_obj_set_style_bg_color(content_, lvgl_theme->chat_background_color(),
-                              0);  // Background for chat area
+    {
+        Settings ui_settings("ui", false);
+        chat_style_ = ui_settings.GetInt("chat_style", 0);
+        if (chat_style_ < 0 || chat_style_ > 3) {
+            chat_style_ = 0;
+        }
+        const uint32_t bg = (chat_style_ == 1) ? 0x111111
+                            : (chat_style_ == 2 ? 0x000000 : 0xEDEDED);
+        lv_obj_set_style_bg_color(content_, lv_color_hex(bg), 0);
+    }
 
     // Enable scrolling for chat content
     lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_OFF);
@@ -579,15 +588,32 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
      *  - 小智（assistant）：左对齐、白色气泡、头像在左
      *  - 系统（system）：居中灰色胶囊，无头像
      */
+    /* 聊天样式预设（网页可选）：0=微信浅色 1=微信深色 2=iMessage 3=极简 */
+    struct ChatStyle {
+        uint32_t user_bg, user_fg, other_bg, other_fg, chat_bg;
+        int radius;
+        bool avatar, tail;
+    };
+    static const ChatStyle kStyles[] = {
+        /* 微信浅色 */ {0x95EC69, 0x111111, 0xFFFFFF, 0x111111, 0xEDEDED, 10, true, true},
+        /* 微信深色 */ {0x3EB575, 0xF2FFF6, 0x2C2C2E, 0xF2FFF6, 0x111111, 10, true, true},
+        /* iMessage */ {0x0A84FF, 0xFFFFFF, 0xE9E9EB, 0x111111, 0x000000, 18, false, false},
+        /* 极简     */ {0x000000, 0x95EC69, 0x000000, 0xD8DEE9, 0xEDEDED,  0, false, false},
+    };
+    const int style_idx = (chat_style_ >= 0 && chat_style_ < 4) ? chat_style_ : 0;
+    const ChatStyle& cs = kStyles[style_idx];
+    const bool minimal = (style_idx == 3);
+    const uint32_t chat_bg = (style_idx == 1) ? 0x111111 : cs.chat_bg;
+
     const bool is_user = strcmp(role, "user") == 0;
     const bool is_system = strcmp(role, "system") == 0;
     const char* role_tag = is_user ? "user" : (is_system ? "system" : "assistant");
 
-    constexpr int kAvatarSize = 26;
-    constexpr int kAvatarGap = 6;
+    const int kAvatarSize = cs.avatar ? 26 : 0;
+    const int kAvatarGap = cs.avatar ? 6 : 0;
     constexpr int kBubblePadH = 8;
     constexpr int kBubblePadV = 5;
-    constexpr int kTailExtra = 6;    /* 小尾巴露在气泡外的部分 */
+    const int kTailExtra = cs.tail ? 6 : 0;    /* 小尾巴露在气泡外的部分 */
     const lv_coord_t row_w = LV_HOR_RES - 2 * lvgl_theme->spacing(4);
     /* 文本可用宽度 = 行宽 - 头像 - 左右内边距 - 尾巴（气泡本身是内容自适应） */
     const lv_coord_t max_text_w =
@@ -626,13 +652,13 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_center(av_text);
         return av;
     };
-    if (!is_system && !is_user) {
+    if (cs.avatar && !is_system && !is_user) {
         make_avatar("AI", 0x3A7AFE);
     }
 
     /* ---- 气泡 ---- */
     lv_obj_t* msg_bubble = lv_obj_create(row);
-    lv_obj_set_style_radius(msg_bubble, 10, 0);
+    lv_obj_set_style_radius(msg_bubble, cs.radius, 0);
     lv_obj_set_scrollbar_mode(msg_bubble, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_border_width(msg_bubble, 0, 0);
     lv_obj_set_style_pad_all(msg_bubble, lvgl_theme->spacing(4), 0);
@@ -647,15 +673,17 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_obj_set_user_data(msg_bubble, (void*)role_tag);
 
     if (is_user) {
-        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->user_bubble_color(), 0);
-        lv_obj_set_style_text_color(msg_bubble, lvgl_theme->text_color(), 0);
+        lv_obj_set_style_bg_color(msg_bubble, lv_color_hex(cs.user_bg), 0);
+        lv_obj_set_style_bg_opa(msg_bubble, minimal ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(msg_bubble, lv_color_hex(cs.user_fg), 0);
     } else if (is_system) {
         lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->system_bubble_color(), 0);
         lv_obj_set_style_text_color(msg_bubble, lvgl_theme->system_text_color(), 0);
         lv_obj_set_style_radius(msg_bubble, 8, 0);
     } else {
-        lv_obj_set_style_bg_color(msg_bubble, lvgl_theme->assistant_bubble_color(), 0);
-        lv_obj_set_style_text_color(msg_bubble, lvgl_theme->text_color(), 0);
+        lv_obj_set_style_bg_color(msg_bubble, lv_color_hex(cs.other_bg), 0);
+        lv_obj_set_style_bg_opa(msg_bubble, minimal ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(msg_bubble, lv_color_hex(cs.other_fg), 0);
     }
 
     /* ---- 文本（先量宽度，再夹到最大宽度内） ---- */
@@ -664,9 +692,10 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     if (auto tf = lvgl_theme->text_font()) {
         lv_obj_set_style_text_font(msg_text, tf->font(), 0);
     }
-    lv_obj_set_style_text_color(msg_text, lvgl_theme->text_color(), 0);
     if (is_system) {
         lv_obj_set_style_text_color(msg_text, lvgl_theme->system_text_color(), 0);
+    } else {
+        lv_obj_set_style_text_color(msg_text, lv_color_hex(is_user ? cs.user_fg : cs.other_fg), 0);
     }
 
     lv_obj_set_width(msg_text, LV_SIZE_CONTENT);
@@ -682,13 +711,12 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     lv_label_set_long_mode(msg_text, LV_LABEL_LONG_WRAP);
 
     /* ---- 小尾巴（微信气泡尖角）：旋转 45° 的小方块，压在气泡边缘 ---- */
-    if (!is_system) {
+    if (cs.tail && !is_system) {
         lv_obj_t* tail = lv_obj_create(msg_bubble);
         lv_obj_remove_style_all(tail);
         lv_obj_set_size(tail, 10, 10);
         lv_obj_set_style_radius(tail, 2, 0);
-        lv_obj_set_style_bg_color(
-            tail, is_user ? lvgl_theme->user_bubble_color() : lvgl_theme->assistant_bubble_color(), 0);
+        lv_obj_set_style_bg_color(tail, lv_color_hex(is_user ? cs.user_bg : cs.other_bg), 0);
         lv_obj_set_style_bg_opa(tail, LV_OPA_COVER, 0);
         lv_obj_set_style_transform_rotation(tail, 450, 0);   /* 45.0° */
         if (is_user) {
@@ -700,7 +728,7 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
         lv_obj_move_background(tail);
     }
 
-    if (!is_system && is_user) {
+    if (cs.avatar && !is_system && is_user) {
         make_avatar("我", 0x07C160);
     }
 
@@ -713,6 +741,46 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
 
     // Store reference to the latest message label
     chat_message_label_ = msg_text;
+}
+
+void LcdDisplay::ApplyChatStyle() {
+    if (content_ == nullptr) {
+        return;
+    }
+    DisplayLockGuard lock(this);
+    {
+        Settings ui_settings("ui", false);
+        chat_style_ = ui_settings.GetInt("chat_style", 0);
+        if (chat_style_ < 0 || chat_style_ > 3) {
+            chat_style_ = 0;
+        }
+    }
+    const uint32_t bg = (chat_style_ == 1) ? 0x111111 : (chat_style_ == 2 ? 0x000000 : 0xEDEDED);
+    lv_obj_set_style_bg_color(content_, lv_color_hex(bg), 0);
+    lv_obj_set_style_bg_opa(content_, LV_OPA_COVER, 0);
+
+    /* 自定义聊天背景图（assets 尾部第三槽）：有就铺满 + 按不透明度压暗 */
+    static lv_image_dsc_t chat_bg_dsc = {};
+    uint8_t* rgb = nullptr;
+    size_t len = 0;
+    uint32_t w = 0, h = 0;
+    auto& img = UserImage::GetInstance();
+    if (img.Has(UserImage::kChatBackground) &&
+        img.Decoded(UserImage::kChatBackground, &rgb, &len, &w, &h)) {
+        chat_bg_dsc = {};
+        chat_bg_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+        chat_bg_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+        chat_bg_dsc.header.w = w;
+        chat_bg_dsc.header.h = h;
+        chat_bg_dsc.data_size = len;
+        chat_bg_dsc.data = rgb;
+        lv_obj_set_style_bg_image_src(content_, &chat_bg_dsc, 0);
+        lv_obj_set_style_bg_image_opa(content_, 150, 0);   /* 约 59%，压暗保证文字可读 */
+        ESP_LOGI(TAG, "chat background image applied (%ux%u)", (unsigned)w, (unsigned)h);
+    } else {
+        lv_obj_set_style_bg_image_src(content_, nullptr, 0);
+    }
+    ESP_LOGI(TAG, "chat style -> %d", chat_style_);
 }
 
 void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {

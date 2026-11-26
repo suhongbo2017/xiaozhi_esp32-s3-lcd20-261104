@@ -13,8 +13,9 @@
 
 namespace {
 constexpr uint32_t kMagic = 0x4D495A58;      /* "XZIM" */
-constexpr size_t kAreaSize = 0x100000;       /* assets 分区尾部预留 1MB */
-constexpr size_t kSlotSize = 0x78000;        /* 每槽 480KB */
+/* assets 分区尾部预留 1.5MB，三个槽（开机图 / 待机背景 / 聊天背景），每槽 480KB */
+constexpr size_t kAreaSize = 0x180000;
+constexpr size_t kSlotSize = 0x78000;
 constexpr size_t kHdrSize = 32;
 constexpr size_t kMaxImage = kSlotSize - kHdrSize;
 
@@ -86,7 +87,7 @@ bool UserImage::SlotOffset(Kind kind, size_t* off, size_t* size) {
     if (!ready_) {
         return false;
     }
-    const size_t idx = (kind == kBackground) ? 1 : 0;
+    const size_t idx = (kind == kChatBackground) ? 2 : ((kind == kBackground) ? 1 : 0);
     *off = area_base_ + idx * kSlotSize;
     *size = kSlotSize;
     return true;
@@ -263,7 +264,7 @@ size_t UserImage::Read(Kind kind, uint8_t* out, size_t max_len) {
 
 bool UserImage::Decoded(Kind kind, uint8_t** rgb, size_t* rgb_len, uint32_t* width, uint32_t* height) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const int idx = (kind == kBackground) ? 1 : 0;
+    const int idx = (kind == kChatBackground) ? 2 : ((kind == kBackground) ? 1 : 0);
     if (cached_rgb_[idx] != nullptr && cached_gen_[idx] == gen_) {
         if (rgb) {
             *rgb = cached_rgb_[idx];
@@ -315,8 +316,10 @@ bool UserImage::Decoded(Kind kind, uint8_t** rgb, size_t* rgb_len, uint32_t* wid
     cached_w_[idx] = static_cast<uint32_t>(w);
     cached_h_[idx] = static_cast<uint32_t>(h);
     cached_gen_[idx] = gen_;
-    ESP_LOGI(TAG, "%s decoded: %ux%u (%u bytes)", kind == kBackground ? "background" : "boot image",
-             (unsigned)w, (unsigned)h, (unsigned)out_len);
+    const char* kind_name = kind == kChatBackground ? "chat background"
+                            : (kind == kBackground ? "background" : "boot image");
+    ESP_LOGI(TAG, "%s decoded: %ux%u (%u bytes)", kind_name, (unsigned)w, (unsigned)h,
+             (unsigned)out_len);
 
     if (rgb) {
         *rgb = out;

@@ -16,6 +16,8 @@
 
 #include <cJSON.h>
 #include <esp_http_server.h>
+#include <driver/gpio.h>
+#include <led_strip.h>
 #include <esp_partition.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
@@ -24,6 +26,7 @@
 #include <esp_log.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include <cstring>
@@ -35,595 +38,7 @@ namespace {
 
 httpd_handle_t g_server = nullptr;
 
-constexpr const char* kHtml = R"HTML(<!doctype html>
-<html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>小智设备管理</title>
-<style>
-:root{color-scheme:dark}
-body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:#0e1e33;color:#e8f1ff}
-.wrap{max-width:560px;margin:0 auto;padding:20px 16px 48px}
-h1{font-size:20px;margin:8px 0 4px}
-.sub{color:#8fa6bf;font-size:13px;margin-bottom:18px}
-.card{background:#13273f;border:1px solid #1e3a58;border-radius:14px;padding:16px;margin:14px 0}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0}
-label{color:#b9cde4}
-input[type=range]{width:100%}
-input[type=text]{flex:1;background:#0b1a2a;border:1px solid #1e3a58;color:#e8f1ff;border-radius:10px;padding:10px}
-select{background:#0b1a2a;border:1px solid #1e3a58;color:#e8f1ff;border-radius:10px;padding:8px 10px}
-input[type=color]{width:46px;height:32px;border:none;background:none}
-button{width:100%;padding:13px;border:none;border-radius:12px;background:#00a2ff;color:#04121f;font-weight:700;font-size:16px;margin-top:6px}
-button:active{transform:scale(.99)}
-.ok{color:#37e39b}.warn{color:#ffcf5c}
-.tip{color:#8fa6bf;font-size:12px;margin-top:6px}
-.val{color:#00e5ff;font-variant-numeric:tabular-nums}
-pre{background:#0b1a2a;border-radius:10px;padding:10px;font-size:12px;overflow:auto;max-height:150px}
-.tabs{display:flex;gap:6px;background:#0b1a2a;border:1px solid #1e3a58;border-radius:12px;padding:5px;margin:0 0 6px;position:sticky;top:0;z-index:9}
-.tabs button{flex:1;margin:0;padding:9px 4px;background:transparent;color:#9fb6cf;font-size:13px;font-weight:600;border-radius:9px}
-.tabs button.on{background:#00a2ff;color:#04121f}
-.pane{display:none}.pane.on{display:block}
-.imgbox{width:100%;aspect-ratio:3/4;background:#0b1a2a;border:1px dashed #2b4d70;border-radius:12px;
- display:flex;align-items:center;justify-content:center;overflow:hidden;margin:10px 0;color:#5c7490;font-size:13px}
-.imgbox img{width:100%;height:100%;object-fit:cover}
-.btnrow{display:flex;gap:8px}
-.btnrow button{flex:1}
-button.ghost{background:#1b3350;color:#cfe3f7}
-.dev-card{background:#14263b;border:1px solid #22405e;border-radius:14px;padding:14px;margin:12px 0}
-.dev-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.dev-name{font-size:17px;font-weight:700}
-.dev-sub{color:#8fa6bf;font-size:12px;margin-top:4px}
-.sw{width:58px;height:32px;border-radius:16px;background:#2b4d70;position:relative;cursor:pointer;
-    transition:background .18s;flex:0 0 auto;border:none;padding:0}
-.sw.on{background:#37e39b}
-.sw::after{content:'';position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;
-    background:#fff;transition:left .18s}
-.sw.on::after{left:29px}
-.dev-actions{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
-.dev-state{font-size:13px}
-.dev-state.on{color:#37e39b}.dev-state.off{color:#8fa6bf}
-.btn-del{background:#3a2028;color:#ff9a9a;border:none;border-radius:10px;padding:8px 14px;font-size:13px;width:auto;margin:0}
-.modal{position:fixed;inset:0;background:rgba(4,10,18,.86);display:none;align-items:center;justify-content:center;z-index:50;padding:14px}
-.modal.on{display:flex}
-.modal-box{background:#12253c;border:1px solid #24425f;border-radius:16px;padding:14px;width:100%;max-width:340px}
-.modal-title{font-weight:700;margin-bottom:10px}
-.crop-wrap{width:100%;display:flex;justify-content:center;margin-bottom:10px;touch-action:none}
-#crop_canvas{width:210px;height:280px;border-radius:10px;background:#0b1a2a;box-shadow:0 0 0 1px #2b4d70 inset;cursor:grab}
-#crop_canvas.dragging{cursor:grabbing}
-}}
-</style>
-</style></head><body><div class="wrap">
-<h1>小智设备管理</h1>
-<div class="sub" id="dev">连接中…</div>
-
-<div class="tabs">
-  <button data-tab="display" class="on">显示</button>
-  <button data-tab="look">外观</button>
-  <button data-tab="sound">声音</button>
-  <button data-tab="led">灯光</button>
-  <button data-tab="gpio">开关</button>
-  <button data-tab="sys">系统</button>
-</div>
-
-<!-- ============ 显示 ============ -->
-<div class="pane on" id="pane-display">
-  <div class="card">
-    <div class="row"><label>主题</label>
-      <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select>
-    </div>
-    <div class="row"><label>屏幕亮度 <span class="val" id="bv">-</span></label></div>
-    <input type="range" id="brightness" min="0" max="100" step="1">
-  </div>
-
-  <div class="card">
-    <div class="row"><label><b>待机页</b>（时钟 / 天气 / 指数）</label>
-      <select id="standby"><option value="1">开启</option><option value="0">关闭</option></select>
-    </div>
-    <div class="row"><label>城市</label><input type="text" id="standby_city" placeholder="上海"></div>
-    <div class="row"><label>指数 / 个股</label></div>
-    <input type="text" id="standby_symbols" placeholder="usIXIC,usINX,sh000001">
-    <div class="tip">默认 纳指 / 标普 / 上证；也支持 sh600519、hk00700、usNVDA，逗号分隔最多 4 个</div>
-  </div>
-
-  <div class="card">
-    <div class="row"><label><b>待机背景图</b></label></div>
-    <div class="imgbox" id="bg_box">未设置（使用深色渐变）</div>
-    <div class="btnrow">
-      <button onclick="document.getElementById('bg_file').click()">选择图片</button>
-      <button class="ghost" onclick="clearImage('bg')">清除</button>
-    </div>
-    <input type="file" id="bg_file" accept="image/*" style="display:none">
-    <div class="tip" id="bg_msg"></div>
-    <div class="tip">上传后自动裁成 240×320、JPEG 压缩（约 20KB），显示在待机页文字下方</div>
-  </div>
-</div>
-
-<!-- ============ 外观 ============ -->
-<div class="pane" id="pane-look">
-  <div class="card">
-    <div class="row"><label><b>开机图片</b></label></div>
-    <div class="imgbox" id="boot_box">未设置（开机直接进对话界面）</div>
-    <div class="btnrow">
-      <button onclick="document.getElementById('boot_file').click()">选择图片</button>
-      <button class="ghost" onclick="clearImage('boot')">清除</button>
-    </div>
-    <input type="file" id="boot_file" accept="image/*" style="display:none">
-    <div class="tip" id="boot_msg"></div>
-    <div class="tip">开机显示约 2 秒，然后进入正常界面</div>
-  </div>
-
-  <div class="card">
-    <div class="row"><label>字体 / 表情资源包</label>
-      <select id="variant">
-        <option value="a20_e64" selected>20px 字体 + 64px 表情（推荐）</option>
-        <option value="a16_e32">16px 字体 + 32px 表情（省空间）</option>
-        <option value="a30_e64">30px 字体 + 64px 表情（大字）</option>
-      </select>
-    </div>
-    <button id="applyAssets" style="background:#ff9f43">应用并重启</button>
-    <div class="tip" id="amsg"></div>
-    <div class="tip">下载资源包写入 assets 分区并自动重启（约 5~20 秒），不影响上面两张图片</div>
-  </div>
-</div>
-
-<!-- ============ 声音 ============ -->
-<div class="pane" id="pane-sound">
-  <div class="card">
-    <div class="row"><label><b>唤醒词</b> <span class="val" id="ww_name"></span></label>
-      <select id="wake_enabled"><option value="1">开启</option><option value="0">关闭</option></select>
-    </div>
-    <div class="row"><label>灵敏度 <span class="val" id="wtv">-</span></label></div>
-    <input type="range" id="wake_threshold" min="40" max="99" step="1">
-    <div class="tip">数值越小越容易唤醒（也更容易误唤醒）；0.40~0.99 生效</div>
-    <div class="tip warn" id="wake_warn" style="display:none">关闭唤醒词后，只能用 BOOT 键开始/结束说话</div>
-  </div>
-
-  <div class="card">
-    <div class="row"><label>音量 <span class="val" id="vv">-</span></label></div>
-    <input type="range" id="volume" min="0" max="100" step="1">
-    <div class="row"><label>音乐播放时音量比例 <span class="val" id="dv">-</span>%</label></div>
-    <input type="range" id="duck" min="30" max="100" step="5">
-    <div class="tip">播放音乐时自动压低音量，方便用唤醒词打断</div>
-  </div>
-</div>
-
-<!-- ============ 灯光 ============ -->
-<div class="pane" id="pane-led">
-  <div class="card">
-    <div class="row"><label>状态灯</label>
-      <select id="led_mode"><option value="on">跟随状态</option><option value="off">常灭</option><option value="color">固定颜色</option></select>
-    </div>
-    <div class="row"><label>固定颜色</label><input type="color" id="led_color" value="#00b3ff"></div>
-  </div>
-</div>
-
-<!-- ============ 用户开关（GPIO） ============ -->
-<div class="pane" id="pane-gpio">
-  <div class="card">
-    <div class="row"><label><b>我的开关</b></label></div>
-    <div id="gpio_list" class="tip">加载中…</div>
-    <div class="tip">可以用语音控制，例如说「打开打印机灯光」</div>
-  </div>
-
-  <div class="card">
-    <div class="row"><label><b>新增 / 编辑</b></label></div>
-    <div class="row"><label>名称</label><input type="text" id="g_name" placeholder="打印机灯光"></div>
-    <div class="row"><label>GPIO 号</label>
-      <select id="g_pin"><option value="">（加载中…）</option></select>
-    </div>
-    <div class="row"><label>触发电平</label>
-      <select id="g_active"><option value="1">高电平点亮</option><option value="0">低电平点亮（继电器）</option></select>
-    </div>
-    <div class="row"><label>上电初始状态</label>
-      <select id="g_init"><option value="0">关闭</option><option value="1">打开</option></select>
-    </div>
-    <div class="card" style="background:#0f2033;margin:12px 0 0">
-      <div class="tip">已被占用的引脚</div>
-      <div class="tip" id="g_reserved" style="line-height:1.9"></div>
-    </div>
-    <button id="g_add">添加这一路</button>
-    <div class="tip" id="g_msg"></div>
-  </div>
-</div>
-
-<!-- ============ 系统 ============ -->
-<div class="pane" id="pane-sys">
-  <div class="card">
-    <div class="row"><label>音乐服务地址</label></div>
-    <input type="text" id="api" placeholder="http://47.116.199.150:2233">
-    <div class="tip">改完保存立即生效（无需重启）</div>
-  </div>
-  <div class="card">
-    <button class="ghost" onclick="chatTest()">预览聊天气泡样式</button>
-    <button class="ghost" onclick="reboot()" style="margin-top:8px">重启设备</button>
-    <div class="tip">重启约 8 秒；开机图片改动需要重启才能看到</div>
-  </div>
-  <div class="card" style="opacity:.9">
-    <div class="tip">当前状态</div><pre id="status">-</pre>
-  </div>
-</div>
-
-<button id="save">保存并应用</button>
-<div class="tip" id="msg"></div>
-
-<div class="modal" id="del_modal">
-  <div class="modal-box">
-    <div class="modal-title">删除开关</div>
-    <div class="tip" id="del_text">确定要删除这个开关吗？</div>
-    <div class="btnrow" style="margin-top:14px">
-      <button class="ghost" onclick="delCancel()">取消</button>
-      <button id="del_ok" style="background:#ff6b6b">确认删除</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="crop_modal">
-  <div class="modal-box">
-    <div class="modal-title">裁切图片 · <span id="crop_title">-</span></div>
-    <div class="crop-wrap"><canvas id="crop_canvas" width="240" height="320"></canvas></div>
-    <div class="row"><label>缩放 <span class="val" id="crop_zv">100</span>%</label></div>
-    <input type="range" id="crop_zoom" min="100" max="400" step="5" value="100">
-    <div class="tip">拖动图片调整位置；框内就是屏幕最终显示的样子（240×320）</div>
-    <div class="btnrow" style="margin-top:10px">
-      <button class="ghost" onclick="cropCancel()">取消</button>
-      <button class="ghost" onclick="cropReset()">复位</button>
-    </div>
-    <button id="crop_ok">确认并上传</button>
-    <div class="tip" id="crop_msg"></div>
-  </div>
-</div>
-</div>
-<script>
-const $ = id => document.getElementById(id);
-let cur = {};
-function fill(s){
-  cur = s;
-  $('dev').textContent = (s.board||'设备') + ' · ' + location.host + ' · ' + (s.mac||'');
-  $('theme').value = s.theme || 'dark';
-  $('brightness').value = s.brightness ?? 80; $('bv').textContent = $('brightness').value;
-  $('volume').value = s.volume ?? 70; $('vv').textContent = $('volume').value;
-  $('duck').value = s.duck ?? 60; $('dv').textContent = $('duck').value;
-  $('led_mode').value = s.led_mode || 'on';
-
-  if (s.led_color) $('led_color').value = s.led_color;
-  if (s.api) $('api').value = s.api;
-  $('standby').value = String(s.standby ?? 1);
-  $('standby_city').value = s.standby_city || '上海';
-  $('standby_symbols').value = s.standby_symbols || 'usIXIC,usINX,sh000001';
-  $('wake_enabled').value = String(s.wake_enabled ?? 1);
-  $('wake_threshold').value = s.wake_threshold ?? 50;
-  $('wtv').textContent = ((s.wake_threshold ?? 50)/100).toFixed(2);
-  $('ww_name').textContent = s.wake_words ? ('· ' + s.wake_words) : '';
-  $('wake_warn').style.display = (s.wake_enabled ?? 1) ? 'none' : 'block';
-  $('status').textContent = JSON.stringify(s, null, 1);
-}
-async function load(){
-  try{ const r = await fetch('/api/status'); fill(await r.json()); }
-  catch(e){ $('msg').textContent='读取失败：'+e; }
-}
-
-
-/* ---------------- 用户 GPIO 开关 ---------------- */
-let gpioDevices = [], gpioReserved = [], gpioUsed = [], gpioAvailable = [];
-
-function renderGpio(){
-  const box = $('gpio_list');
-  box.innerHTML = '';
-  if (!gpioDevices.length){
-    const empty = document.createElement('div');
-    empty.className = 'tip';
-    empty.textContent = '还没有配置任何开关（下面可以添加）';
-    box.appendChild(empty);
-  } else {
-    gpioDevices.forEach((d, i) => {
-      const card = document.createElement('div');
-      card.className = 'dev-card';
-
-      const top = document.createElement('div');
-      top.className = 'dev-top';
-
-      const left = document.createElement('div');
-      const name = document.createElement('div');
-      name.className = 'dev-name';
-      name.textContent = d.name;
-      const sub = document.createElement('div');
-      sub.className = 'dev-sub';
-      sub.textContent = 'GPIO' + d.gpio + (d.active_high ? ' · 高电平触发' : ' · 低电平触发')
-        + (d.initial_on ? ' · 上电默认开' : '');
-      left.appendChild(name); left.appendChild(sub);
-
-      const sw = document.createElement('button');
-      sw.className = 'sw' + (d.on ? ' on' : '');
-      sw.title = d.on ? '点击关闭' : '点击打开';
-      sw.onclick = () => gpioControl(d.name, d.on ? 'off' : 'on');
-
-      top.appendChild(left); top.appendChild(sw);
-
-      const actions = document.createElement('div');
-      actions.className = 'dev-actions';
-      const st = document.createElement('span');
-      st.className = 'dev-state ' + (d.on ? 'on' : 'off');
-      st.textContent = d.on ? '● 已打开' : '○ 已关闭';
-      const del = document.createElement('button');
-      del.className = 'btn-del';
-      del.textContent = '删除';
-      del.onclick = () => delAsk(d.name);
-      actions.appendChild(st); actions.appendChild(del);
-
-      card.appendChild(top); card.appendChild(actions);
-      box.appendChild(card);
-    });
-  }
-
-  /* 下拉框：只放当前可用的引脚 */
-  const sel = $('g_pin');
-  const prev = sel.value;
-  sel.innerHTML = '';
-  if (!gpioAvailable.length) {
-    const o = document.createElement('option'); o.value=''; o.textContent='没有可用引脚了'; sel.appendChild(o);
-  } else {
-    gpioAvailable.forEach(pin => {
-      const o = document.createElement('option');
-      o.value = pin; o.textContent = 'GPIO' + pin;
-      sel.appendChild(o);
-    });
-    if (prev && gpioAvailable.includes(+prev)) sel.value = prev;
-  }
-
-  /* 说明栏：所有已占用引脚 + 原因 */
-  const notes = gpioUsed.map(u => 'GPIO' + u.gpio + ' · ' + u.reason);
-  $('g_reserved').innerHTML = notes.length ? notes.join('<br>') : '（暂无）';
-}
-
-/* 删除二次确认 */
-let delTarget = null;
-function delAsk(name){
-  delTarget = name;
-  $('del_text').textContent = '确定要删除「' + name + '」吗？删除后引脚会恢复，语音也不能再控制它。';
-  $('del_modal').classList.add('on');
-}
-function delCancel(){
-  delTarget = null;
-  $('del_modal').classList.remove('on');
-}
-$('del_ok').onclick = () => {
-  const name = delTarget;
-  delCancel();
-  if (!name) return;
-  const devices = gpioDevices
-    .filter(d => d.name !== name)
-    .map(d => ({name:d.name, gpio:d.gpio, active_high:d.active_high, initial_on:d.initial_on}));
-  saveGpio(devices, '已删除「' + name + '」✓');
-};
-
-async function loadGpio(){
-  try{
-    const r = await fetch('/api/gpio');
-    const j = await r.json();
-    gpioDevices = j.devices || [];
-    gpioReserved = j.reserved || [];
-    gpioUsed = j.used || [];
-    gpioAvailable = j.available || [];
-    renderGpio();
-  }catch(e){ $('g_msg').textContent = '读取失败：'+e; }
-}
-
-async function gpioControl(name, state){
-  try{
-    const r = await fetch('/api/gpio',{method:'POST',headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name: name, state: state})});
-    const j = await r.json();
-    $('g_msg').className = 'tip ' + (j.ok?'ok':'warn');
-    $('g_msg').textContent = j.message || (j.ok?'已执行':'失败');
-    loadGpio();
-  }catch(e){ $('g_msg').textContent = '失败：'+e; }
-}
-
-async function saveGpio(devices, msg){
-  try{
-    const r = await fetch('/api/gpio',{method:'POST',headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({devices: devices})});
-    const j = await r.json();
-    $('g_msg').className = 'tip ' + (j.ok?'ok':'warn');
-    $('g_msg').textContent = j.ok ? (msg||'已保存 ✓') : ('失败：'+(j.error||''));
-    if (j.ok) loadGpio();
-  }catch(e){ $('g_msg').textContent = '失败：'+e; }
-}
-
-$('g_add').onclick = () => {
-  const name = $('g_name').value.trim();
-  const pin = parseInt($('g_pin').value, 10);
-  if (!name){ $('g_msg').textContent='请填写名称'; $('g_msg').className='tip warn'; return; }
-  if (!(pin >= 0 && pin <= 48)){ $('g_msg').textContent='没有可用引脚'; $('g_msg').className='tip warn'; return; }
-  const devices = gpioDevices.map(d => ({name:d.name, gpio:d.gpio, active_high:d.active_high, initial_on:d.initial_on}));
-  devices.push({name: name, gpio: pin, active_high: +$('g_active').value === 1, initial_on: +$('g_init').value === 1});
-  saveGpio(devices, '已添加 ✓（现在可以直接说「打开'+name+'」）');
-  $('g_name').value='';
-};
-
-/* ---------------- 分类卡片：tab 切换 ---------------- */
-document.querySelectorAll('.tabs button').forEach(btn=>{
-  btn.onclick = () => {
-    document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));
-    document.querySelectorAll('.pane').forEach(p=>p.classList.remove('on'));
-    btn.classList.add('on');
-    $('pane-'+btn.dataset.tab).classList.add('on');
-    if (btn.dataset.tab === 'gpio') loadGpio();
-    window.scrollTo({top:0,behavior:'smooth'});
-  };
-});
-
-/* ---------------- 开机图 / 背景图 ---------------- */
-const IMG_W = 240, IMG_H = 320;
-function previewImage(kind){
-  const box = $(kind+'_box');
-  const url = '/api/image?kind='+kind+'&t='+Date.now();
-  const im = new Image();
-  im.onload = () => { box.innerHTML=''; box.appendChild(im); };
-  im.onerror = () => { box.textContent = kind==='bg' ? '未设置（使用深色渐变）' : '未设置（开机直接进对话界面）'; };
-  im.src = url;
-}
-/* ---------------- 裁切弹窗：WYSIWYG 240x320 ---------------- */
-const crop = {kind:null, bmp:null, zoom:1, ox:0, oy:0, dragging:false, px:0, py:0};
-const cv = document.getElementById('crop_canvas');
-const ctx = cv.getContext('2d');
-
-function cropTitle(kind){ return kind === 'bg' ? '待机背景图' : '开机图'; }
-
-function drawCrop(){
-  if (!crop.bmp) return;
-  const iw = crop.bmp.width, ih = crop.bmp.height;
-  const base = Math.max(IMG_W/iw, IMG_H/ih);       // cover：保证铺满
-  const k = base * crop.zoom;
-  const dw = iw*k, dh = ih*k;
-  // 允许移动范围：图比画布大的部分
-  const maxX = Math.max(0, (dw-IMG_W)/2), maxY = Math.max(0, (dh-IMG_H)/2);
-  crop.ox = Math.min(maxX, Math.max(-maxX, crop.ox));
-  crop.oy = Math.min(maxY, Math.max(-maxY, crop.oy));
-  ctx.fillStyle = '#0b1a2a';
-  ctx.fillRect(0,0,IMG_W,IMG_H);
-  ctx.drawImage(crop.bmp, (IMG_W-dw)/2 + crop.ox, (IMG_H-dh)/2 + crop.oy, dw, dh);
-}
-
-function openCrop(kind, file){
-  const msg = $(kind+'_msg');
-  msg.textContent = '读取图片…';
-  createImageBitmap(file).then(bmp => {
-    crop.kind = kind; crop.bmp = bmp; crop.zoom = 1; crop.ox = 0; crop.oy = 0;
-    $('crop_title').textContent = cropTitle(kind);
-    $('crop_zoom').value = 100; $('crop_zv').textContent = '100';
-    $('crop_msg').textContent = '原图 '+bmp.width+'×'+bmp.height+' → 输出 240×320';
-    $('crop_modal').classList.add('on');
-    msg.textContent = '';
-    drawCrop();
-  }).catch(e => { msg.textContent = '读取失败：'+e; msg.className='tip warn'; });
-}
-function cropCancel(){ $('crop_modal').classList.remove('on'); crop.bmp = null; }
-function cropReset(){ crop.zoom = 1; crop.ox = 0; crop.oy = 0; $('crop_zoom').value = 100; $('crop_zv').textContent='100'; drawCrop(); }
-
-$('crop_zoom').addEventListener('input', e => {
-  crop.zoom = (+e.target.value)/100;
-  $('crop_zv').textContent = e.target.value;
-  drawCrop();
-});
-
-/* 拖动 / 触摸 */
-cv.addEventListener('pointerdown', e => {
-  if (!crop.bmp) return;
-  crop.dragging = true; crop.px = e.clientX; crop.py = e.clientY;
-  cv.classList.add('dragging'); cv.setPointerCapture(e.pointerId);
-});
-cv.addEventListener('pointermove', e => {
-  if (!crop.dragging || !crop.bmp) return;
-  const rect = cv.getBoundingClientRect();
-  const sx = IMG_W / rect.width;      // 显示尺寸 -> 画布像素
-  crop.ox += (e.clientX - crop.px) * sx;
-  crop.oy += (e.clientY - crop.py) * sx;
-  crop.px = e.clientX; crop.py = e.clientY;
-  drawCrop();
-});
-['pointerup','pointercancel'].forEach(ev => cv.addEventListener(ev, () => {
-  crop.dragging = false; cv.classList.remove('dragging');
-}));
-
-$('crop_ok').onclick = async () => {
-  if (!crop.bmp) return;
-  const kind = crop.kind;
-  const msg = $(kind+'_msg');
-  $('crop_msg').textContent = '生成并上传…';
-  try{
-    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
-    $('crop_msg').textContent = '上传中…（'+(blob.size/1024).toFixed(0)+'KB，240×320）';
-    const r = await fetch('/api/image?kind='+kind, {method:'POST', headers:{'Content-Type':'image/jpeg'}, body:blob});
-    const j = await r.json();
-    if (j.ok) {
-      cropCancel();
-      msg.className = 'tip ok';
-      msg.textContent = '已保存 ✓（240×320，'+(blob.size/1024).toFixed(0)+'KB）';
-      previewImage(kind);
-    } else {
-      $('crop_msg').textContent = '失败：'+(j.error||'');
-    }
-  }catch(e){ $('crop_msg').textContent = '失败：'+e; }
-};
-
-async function clearImage(kind){
-  if(!confirm('确定清除这张图片吗？')) return;
-  const msg = $(kind+'_msg');
-  try{
-    const r = await fetch('/api/image?kind='+kind+'&clear=1',{method:'POST'});
-    const j = await r.json();
-    msg.textContent = j.ok ? '已清除 ✓' : ('失败：'+(j.error||''));
-    msg.className = 'tip ' + (j.ok?'ok':'warn');
-    previewImage(kind);
-  }catch(e){ msg.textContent='失败：'+e; }
-}
-['boot','bg'].forEach(kind=>{
-  $(kind+'_file').addEventListener('change', e=>{
-    if (e.target.files && e.target.files[0]) openCrop(kind, e.target.files[0]);
-    e.target.value = '';
-  });
-  previewImage(kind);
-});
-
-$('wake_threshold').addEventListener('input', e=>{
-  $('wtv').textContent = ((+e.target.value)/100).toFixed(2);
-});
-$('wake_enabled').addEventListener('change', e=>{
-  $('wake_warn').style.display = (+e.target.value) ? 'none' : 'block';
-});
-['brightness','volume','duck'].forEach(id=>{
-  $(id).addEventListener('input',()=>{ $(id[0]+'v').textContent = $(id).value; });
-});
-$('save').onclick = async () => {
-  $('msg').textContent = '保存中…';
-  const body = {
-    theme: $('theme').value,
-    brightness: +$('brightness').value,
-    volume: +$('volume').value,
-    duck: +$('duck').value,
-    led_mode: $('led_mode').value,
-    led_color: $('led_color').value,
-    api: $('api').value.trim(),
-    standby: +$('standby').value,
-    standby_city: $('standby_city').value.trim(),
-    standby_symbols: $('standby_symbols').value.trim(),
-    wake_enabled: +$('wake_enabled').value,
-    wake_threshold: +$('wake_threshold').value
-  };
-  try{
-    const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const j = await r.json();
-    $('msg').className = 'tip ' + (j.ok?'ok':'warn');
-    $('msg').textContent = j.ok ? '已应用 ✓' : ('失败：'+(j.error||''));
-    load();
-  }catch(e){ $('msg').textContent='请求失败：'+e; }
-};
-async function chatTest(){
-  try{
-    await fetch('/api/chat_test',{method:'POST'});
-    $('msg').textContent = '已发送样例消息，看一眼屏幕（说完话后气泡会被清空）';
-  }catch(e){ $('msg').textContent='失败：'+e; }
-}
-async function reboot(){
-  if(!confirm('确定重启设备吗？')) return;
-  $('msg').textContent = '重启中…约 8 秒后刷新页面';
-  try{ await fetch('/api/reboot',{method:'POST'}); }catch(e){}
-  setTimeout(load, 9000);
-}
-$('applyAssets').onclick = async () => {
-  const v = $('variant').value;
-  if(!confirm('将把「'+v+'」资源包写入设备并重启，确定吗？')) return;
-  $('amsg').textContent = '下载中，请稍候…（设备会自动重启）';
-  try{
-    const r = await fetch('/api/assets',{method:'POST',headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({url:'http://47.116.199.150:2233/assets/'+v+'.bin'})});
-    const j = await r.json();
-    $('amsg').textContent = j.ok ? '已开始写入，设备即将重启…' : ('失败：'+(j.error||''));
-  }catch(e){ $('amsg').textContent = '请求失败：'+e; }
-};
-load();
-loadGpio();
-</script></body></html>)HTML";
+/* 网页内容已拆到 main/web/ui/{index.html,style.css,app.js}，由 CMake EMBED_FILES 打包 */
 
 const char* LedModeToString(int mode) {
     switch (mode) {
@@ -695,6 +110,7 @@ std::string BuildStatusJson() {
         led->GetFixedColor(&lr, &lg, &lb);
         snprintf(led_color_hex, sizeof(led_color_hex), "#%02X%02X%02X", lr, lg, lb);
     }
+    cJSON_AddNumberToObject(root, "chat_style", Settings("ui", false).GetInt("chat_style", 0));
     cJSON_AddStringToObject(root, "led_mode", led_mode_str);
     cJSON_AddStringToObject(root, "led_color", led_color_hex);
     auto& app = Application::GetInstance();
@@ -798,7 +214,9 @@ esp_err_t HandleImageGet(httpd_req_t* req) {
         httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no kind\"}");
         return ESP_FAIL;
     }
-    auto kind = strcmp(kind_str, "bg") == 0 ? UserImage::kBackground : UserImage::kBoot;
+    auto kind = strcmp(kind_str, "bg") == 0     ? UserImage::kBackground
+                : strcmp(kind_str, "chat") == 0 ? UserImage::kChatBackground
+                                                : UserImage::kBoot;
     auto& img = UserImage::GetInstance();
     const uint32_t len = img.length(kind);
     if (len == 0) {
@@ -837,13 +255,21 @@ esp_err_t HandleImagePost(httpd_req_t* req) {
         httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no kind\"}");
         return ESP_FAIL;
     }
-    auto kind = strcmp(kind_str, "bg") == 0 ? UserImage::kBackground : UserImage::kBoot;
+    auto kind = strcmp(kind_str, "bg") == 0     ? UserImage::kBackground
+                : strcmp(kind_str, "chat") == 0 ? UserImage::kChatBackground
+                                                : UserImage::kBoot;
     auto& img = UserImage::GetInstance();
 
     if (httpd_query_key_value(query, "clear", clear_str, sizeof(clear_str)) == ESP_OK &&
         clear_str[0] == '1') {
         img.Clear(kind);
-        StandbyService::GetInstance().ReloadBackground();
+        if (kind == UserImage::kBackground) {
+            StandbyService::GetInstance().ReloadBackground();
+        } else if (kind == UserImage::kChatBackground) {
+            if (auto* d = Board::GetInstance().GetDisplay()) {
+                d->ApplyChatStyle();
+            }
+        }
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true,\"cleared\":true}");
         return ESP_OK;
@@ -895,6 +321,10 @@ esp_err_t HandleImagePost(httpd_req_t* req) {
     }
     if (kind == UserImage::kBackground) {
         StandbyService::GetInstance().ReloadBackground();
+    } else if (kind == UserImage::kChatBackground) {
+        if (auto* d = Board::GetInstance().GetDisplay()) {
+            d->ApplyChatStyle();
+        }
     }
     ESP_LOGI(TAG, "image uploaded: kind=%s %d bytes", kind_str, received);
     httpd_resp_set_type(req, "application/json");
@@ -916,6 +346,165 @@ esp_err_t HandleMcpTools(httpd_req_t* req) {
         cJSON_AddItemToArray(arr, cJSON_CreateString(name.c_str()));
     }
     cJSON_AddNumberToObject(root, "count", cJSON_GetArraySize(arr));
+    char* out = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
+    cJSON_free(out);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/* 诊断：直接用 led_strip 驱动指定 GPIO 上的 WS2812，绕过 SingleLed
+ * POST /api/led/probe?pin=48&r=64&g=0&b=0   （默认绿色）
+ */
+esp_err_t HandleLedProbe(httpd_req_t* req) {
+    char query[128] = {0};
+    if (httpd_req_get_url_query_len(req) > 0) {
+        httpd_req_get_url_query_str(req, query, sizeof(query));
+    }
+    auto get_int = [&query](const char* key, int def) {
+        char val[16] = {0};
+        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) {
+            return def;
+        }
+        return atoi(val);
+    };
+    const int pin = get_int("pin", 48);
+    const int r = get_int("r", 0), g = get_int("g", 64), b = get_int("b", 0);
+
+    led_strip_config_t cfg = {};
+    cfg.strip_gpio_num = static_cast<gpio_num_t>(pin);
+    cfg.max_leds = 1;
+    cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
+    cfg.led_model = LED_MODEL_WS2812;
+    led_strip_rmt_config_t rmt = {};
+    rmt.resolution_hz = 10 * 1000 * 1000;
+    led_strip_handle_t strip = nullptr;
+    esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &strip);
+    esp_err_t set_err = ESP_FAIL, ref_err = ESP_FAIL;
+    if (err == ESP_OK && strip != nullptr) {
+        set_err = led_strip_set_pixel(strip, 0, r, g, b);
+        ref_err = led_strip_refresh(strip);
+    }
+    ESP_LOGW(TAG, "led probe GPIO%d rgb=(%d,%d,%d) new=%s set=%s refresh=%s", pin, r, g, b,
+             esp_err_to_name(err), esp_err_to_name(set_err), esp_err_to_name(ref_err));
+    if (strip != nullptr) {
+        led_strip_del(strip);
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", err == ESP_OK && ref_err == ESP_OK);
+    cJSON_AddNumberToObject(root, "pin", pin);
+    cJSON_AddStringToObject(root, "new", esp_err_to_name(err));
+    cJSON_AddStringToObject(root, "set", esp_err_to_name(set_err));
+    cJSON_AddStringToObject(root, "refresh", esp_err_to_name(ref_err));
+    char* out = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
+    cJSON_free(out);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/* 诊断：在指定 GPIO 上闪 N 次（每次 120ms），用于"数闪几下"定位真实 LED 引脚
+ * POST /api/led/blink?pin=48&count=3
+ */
+esp_err_t HandleLedBlink(httpd_req_t* req) {
+    char query[128] = {0};
+    if (httpd_req_get_url_query_len(req) > 0) {
+        httpd_req_get_url_query_str(req, query, sizeof(query));
+    }
+    auto get_int = [&query](const char* key, int def) {
+        char val[16] = {0};
+        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) {
+            return def;
+        }
+        return atoi(val);
+    };
+    const int pin = get_int("pin", 48);
+    const int count = get_int("count", 1);
+
+    led_strip_config_t cfg = {};
+    cfg.strip_gpio_num = static_cast<gpio_num_t>(pin);
+    cfg.max_leds = 1;
+    cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
+    cfg.led_model = LED_MODEL_WS2812;
+    led_strip_rmt_config_t rmt = {};
+    rmt.resolution_hz = 10 * 1000 * 1000;
+    led_strip_handle_t strip = nullptr;
+    esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &strip);
+    int done = 0;
+    if (err == ESP_OK && strip != nullptr) {
+        for (int i = 0; i < count; i++) {
+            led_strip_set_pixel(strip, 0, 96, 96, 96);   /* 白色，够亮 */
+            led_strip_refresh(strip);
+            vTaskDelay(pdMS_TO_TICKS(160));
+            led_strip_clear(strip);
+            vTaskDelay(pdMS_TO_TICKS(160));
+            done++;
+        }
+        led_strip_del(strip);
+    }
+    ESP_LOGW(TAG, "led blink GPIO%d x%d (err=%s)", pin, done, esp_err_to_name(err));
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
+    cJSON_AddNumberToObject(root, "pin", pin);
+    cJSON_AddNumberToObject(root, "blinks", done);
+    char* out = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
+    cJSON_free(out);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/* 诊断：把某个引脚当"普通 GPIO"输出电平（测试是否其实是单色 LED / 继电器）
+ * POST /api/led/gpio?pin=18&level=1&ms=3000
+ */
+esp_err_t HandleLedGpio(httpd_req_t* req) {
+    char query[128] = {0};
+    if (httpd_req_get_url_query_len(req) > 0) {
+        httpd_req_get_url_query_str(req, query, sizeof(query));
+    }
+    auto get_int = [&query](const char* key, int def) {
+        char val[16] = {0};
+        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) {
+            return def;
+        }
+        return atoi(val);
+    };
+    const int pin = get_int("pin", 18);
+    const int level = get_int("level", 1) ? 1 : 0;
+    int ms = get_int("ms", 3000);
+    if (ms < 100) {
+        ms = 100;
+    }
+    if (ms > 15000) {
+        ms = 15000;
+    }
+
+    gpio_config_t cfg = {};
+    cfg.pin_bit_mask = 1ULL << pin;
+    cfg.mode = GPIO_MODE_INPUT_OUTPUT;
+    cfg.pull_up_en = GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    cfg.intr_type = GPIO_INTR_DISABLE;
+    esp_err_t err = gpio_config(&cfg);
+    if (err == ESP_OK) {
+        gpio_set_level(static_cast<gpio_num_t>(pin), level);
+    }
+    ESP_LOGW(TAG, "led gpio test: pin=%d level=%d ms=%d err=%s", pin, level, ms,
+             esp_err_to_name(err));
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    if (err == ESP_OK) {
+        gpio_set_level(static_cast<gpio_num_t>(pin), level ? 0 : 1);
+        vTaskDelay(pdMS_TO_TICKS(300));
+        gpio_reset_pin(static_cast<gpio_num_t>(pin));
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
+    cJSON_AddNumberToObject(root, "pin", pin);
+    cJSON_AddNumberToObject(root, "level", level);
+    cJSON_AddNumberToObject(root, "ms", ms);
     char* out = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, out != nullptr ? out : "{}");
@@ -1037,9 +626,33 @@ esp_err_t HandleGpio(httpd_req_t* req) {
     return ESP_OK;
 }
 
+/* 内嵌的网页文件（CMake 里通过 EMBED_FILES 打包，运行时直接从 flash 发送） */
+extern const uint8_t index_html_start[] asm("_binary_index_html_start");
+extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
+extern const uint8_t style_css_start[]  asm("_binary_style_css_start");
+extern const uint8_t style_css_end[]    asm("_binary_style_css_end");
+extern const uint8_t app_js_start[]     asm("_binary_app_js_start");
+extern const uint8_t app_js_end[]       asm("_binary_app_js_end");
+
 esp_err_t HandleRoot(httpd_req_t* req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, kHtml, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, reinterpret_cast<const char*>(index_html_start),
+                            index_html_end - index_html_start - 1);
+}
+
+esp_err_t HandleStyle(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/css; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=3600");
+    return httpd_resp_send(req, reinterpret_cast<const char*>(style_css_start),
+                            style_css_end - style_css_start - 1);
+}
+
+esp_err_t HandleAppJs(httpd_req_t* req) {
+    httpd_resp_set_type(req, "application/javascript; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=3600");
+    return httpd_resp_send(req, reinterpret_cast<const char*>(app_js_start),
+                            app_js_end - app_js_start - 1);
 }
 
 esp_err_t HandleStatus(httpd_req_t* req) {
@@ -1146,6 +759,19 @@ esp_err_t HandleSettings(httpd_req_t* req) {
                  svc.symbols().c_str());
     }
 
+    auto* chat_style = cJSON_GetObjectItem(root, "chat_style");
+    if (cJSON_IsNumber(chat_style)) {
+        int idx = chat_style->valueint;
+        if (idx < 0 || idx > 3) {
+            idx = 0;
+        }
+        Settings("ui", true).SetInt("chat_style", idx);
+        if (auto* display = board.GetDisplay()) {
+            display->ApplyChatStyle();
+        }
+        ESP_LOGI(TAG, "chat style -> %d", idx);
+    }
+
     auto* led_color = cJSON_GetObjectItem(root, "led_color");
     if (auto* led = board.GetLed()) {
         /* 先同步固定颜色，再切模式；两边都由 Led 自己写 NVS，避免键不一致 */
@@ -1192,11 +818,16 @@ bool AdminServer::Start() {
         return false;
     }
     httpd_uri_t uri_root = {.uri = "/", .method = HTTP_GET, .handler = HandleRoot, .user_ctx = nullptr};
+    httpd_uri_t uri_style = {.uri = "/style.css", .method = HTTP_GET, .handler = HandleStyle, .user_ctx = nullptr};
+    httpd_uri_t uri_app = {.uri = "/app.js", .method = HTTP_GET, .handler = HandleAppJs, .user_ctx = nullptr};
     httpd_uri_t uri_status = {.uri = "/api/status", .method = HTTP_GET, .handler = HandleStatus, .user_ctx = nullptr};
     httpd_uri_t uri_settings = {.uri = "/api/settings", .method = HTTP_POST, .handler = HandleSettings, .user_ctx = nullptr};
     httpd_uri_t uri_assets = {.uri = "/api/assets", .method = HTTP_POST, .handler = HandleAssetsApply, .user_ctx = nullptr};
     httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
     httpd_uri_t uri_chat_test = {.uri = "/api/chat_test", .method = HTTP_POST, .handler = HandleChatTest, .user_ctx = nullptr};
+    httpd_uri_t uri_led_gpio = {.uri = "/api/led/gpio", .method = HTTP_POST, .handler = HandleLedGpio, .user_ctx = nullptr};
+    httpd_uri_t uri_led_blink = {.uri = "/api/led/blink", .method = HTTP_POST, .handler = HandleLedBlink, .user_ctx = nullptr};
+    httpd_uri_t uri_led_probe = {.uri = "/api/led/probe", .method = HTTP_POST, .handler = HandleLedProbe, .user_ctx = nullptr};
     httpd_uri_t uri_mcp_tools = {.uri = "/api/mcp_tools", .method = HTTP_GET, .handler = HandleMcpTools, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_get = {.uri = "/api/gpio", .method = HTTP_GET, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_post = {.uri = "/api/gpio", .method = HTTP_POST, .handler = HandleGpio, .user_ctx = nullptr};
@@ -1209,11 +840,16 @@ bool AdminServer::Start() {
         }
     };
     reg(&uri_root);
+    reg(&uri_style);
+    reg(&uri_app);
     reg(&uri_status);
     reg(&uri_settings);
     reg(&uri_assets);
     reg(&uri_reboot);
     reg(&uri_chat_test);
+    reg(&uri_led_gpio);
+    reg(&uri_led_blink);
+    reg(&uri_led_probe);
     reg(&uri_mcp_tools);
     reg(&uri_gpio_get);
     reg(&uri_gpio_post);

@@ -1090,8 +1090,15 @@ if(CONFIG_BOARD_TYPE_ESP32S3_LCD_BOARD)
         sdmmc
     )
 endif()
+# 管理网页（HTML/CSS/JS 单独存放，便于维护；运行时直接从 flash 发送）
+set(WEB_UI_FILES
+    "web/ui/index.html"
+    "web/ui/style.css"
+    "web/ui/app.js"
+)
+
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${WEB_UI_FILES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES

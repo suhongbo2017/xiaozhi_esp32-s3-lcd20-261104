@@ -28,7 +28,10 @@ SingleLed::SingleLed(gpio_num_t gpio) {
     led_strip_rmt_config_t rmt_config = {};
     rmt_config.resolution_hz = 10 * 1000 * 1000; // 10MHz
 
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_));
+    esp_err_t strip_err = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_);
+    ESP_LOGW(TAG, "WS2812 strip on GPIO%d: %s (handle=%p)", (int)gpio, esp_err_to_name(strip_err),
+             (void*)led_strip_);
+    ESP_ERROR_CHECK(strip_err);
     led_strip_clear(led_strip_);
 
     {
@@ -97,7 +100,7 @@ void SingleLed::TurnOn() {
     esp_timer_stop(blink_timer_);
     esp_err_t e1 = led_strip_set_pixel(led_strip_, 0, r_, g_, b_);
     esp_err_t e2 = led_strip_refresh(led_strip_);
-    ESP_LOGD(TAG, "TurnOn rgb=(%u,%u,%u) set=%s refresh=%s", r_, g_, b_, esp_err_to_name(e1),
+    ESP_LOGI(TAG, "TurnOn rgb=(%u,%u,%u) set=%s refresh=%s", r_, g_, b_, esp_err_to_name(e1),
              esp_err_to_name(e2));
 }
 
@@ -109,7 +112,7 @@ void SingleLed::TurnOff() {
     std::lock_guard<std::mutex> lock(mutex_);
     esp_timer_stop(blink_timer_);
     esp_err_t e = led_strip_clear(led_strip_);
-    ESP_LOGD(TAG, "TurnOff clear=%s", esp_err_to_name(e));
+    ESP_LOGI(TAG, "TurnOff clear=%s", esp_err_to_name(e));
 }
 
 void SingleLed::SetStatusEnabled(bool enabled) {

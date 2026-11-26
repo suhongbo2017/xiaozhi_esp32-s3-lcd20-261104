@@ -20,6 +20,7 @@ protected:
     lv_obj_t* top_bar_ = nullptr;
     lv_obj_t* status_bar_ = nullptr;
     lv_obj_t* content_ = nullptr;
+    int chat_style_ = 0;              /* 0=微信浅色 1=微信深色 2=iMessage 3=极简 */
     lv_obj_t* container_ = nullptr;
     lv_obj_t* side_bar_ = nullptr;
     lv_obj_t* bottom_bar_ = nullptr;
@@ -45,6 +46,7 @@ protected:
 public:
     ~LcdDisplay();
     virtual void SetEmotion(const char* emotion) override;
+    void ApplyChatStyle() override;
     virtual void SetChatMessage(const char* role, const char* content) override;
     virtual void ClearChatMessages() override;
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;

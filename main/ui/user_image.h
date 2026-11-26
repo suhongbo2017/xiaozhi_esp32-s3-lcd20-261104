@@ -32,7 +32,7 @@ extern "C" {
  */
 class UserImage {
 public:
-    enum Kind { kBoot = 0, kBackground = 1 };
+    enum Kind { kBoot = 0, kBackground = 1, kChatBackground = 2 };
 
     static UserImage& GetInstance();
 
@@ -76,11 +76,12 @@ private:
     size_t written_ = 0;
     size_t write_limit_ = 0;
     uint32_t gen_ = 0;          /* 每次写入 +1，用于失效已解码缓存 */
-    uint32_t cached_gen_[2] = {0xFFFFFFFFu, 0xFFFFFFFFu};
-    uint8_t* cached_rgb_[2] = {nullptr, nullptr};
-    size_t cached_len_[2] = {0, 0};
-    uint32_t cached_w_[2] = {0, 0};
-    uint32_t cached_h_[2] = {0, 0};
+    static constexpr int kSlotCount = 3;
+    uint32_t cached_gen_[kSlotCount] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+    uint8_t* cached_rgb_[kSlotCount] = {nullptr, nullptr, nullptr};
+    size_t cached_len_[kSlotCount] = {0, 0, 0};
+    uint32_t cached_w_[kSlotCount] = {0, 0, 0};
+    uint32_t cached_h_[kSlotCount] = {0, 0, 0};
 #ifdef HAVE_LVGL
     lv_image_dsc_t boot_dsc_ = {};
     lv_obj_t* splash_ = nullptr;
