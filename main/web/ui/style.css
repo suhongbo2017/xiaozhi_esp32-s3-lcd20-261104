@@ -1,6 +1,7 @@
 :root{
   --bg:#0b1622; --bg2:#0f1f31; --card:#14263b; --line:#20364e; --line2:#2a4a68;
   --fg:#e8f1ff; --dim:#8fa6bf; --accent:#00b3ff; --ok:#37e39b; --warn:#ffcf5c; --danger:#ff6b6b;
+  --w:520px;              /* 内容最大宽度：宽屏下居中，手机上自适应 */
   color-scheme:dark;
 }
 *{box-sizing:border-box}
@@ -9,7 +10,8 @@ body{margin:0;font:15px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Micro
 
 /* ---------- 头部 ---------- */
 .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;
-     padding:14px 16px 10px;background:linear-gradient(180deg,#0f2136,#0b1622)}
+     padding:14px 16px 10px;background:linear-gradient(180deg,#0f2136,#0b1622);
+     max-width:var(--w);margin:0 auto}
 .hdr-title{font-size:19px;font-weight:700}
 .hdr-sub{font-size:12px;color:var(--dim);margin-top:2px}
 .dot{width:10px;height:10px;border-radius:50%;background:#555;flex:0 0 auto;box-shadow:0 0 0 3px rgba(0,0,0,.3)}
@@ -18,7 +20,8 @@ body{margin:0;font:15px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Micro
 
 /* ---------- Tab ---------- */
 .tabs{display:flex;gap:4px;padding:6px 8px;background:#0b1622;position:sticky;top:0;z-index:20;
-      border-bottom:1px solid var(--line);overflow-x:auto;-webkit-overflow-scrolling:touch}
+      border-bottom:1px solid var(--line);overflow-x:auto;-webkit-overflow-scrolling:touch;
+      max-width:var(--w);margin:0 auto}
 .tabs button{flex:1 1 0;width:auto;min-width:0;background:transparent;border:0;color:var(--dim);
              padding:7px 6px;border-radius:10px;font-size:13px;font-weight:600;line-height:1.25;
              display:flex;flex-direction:column;align-items:center;gap:1px}
@@ -26,12 +29,12 @@ body{margin:0;font:15px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Micro
 .tabs button.on{background:var(--accent);color:#04121f}
 .tabs button.on small{opacity:.8}
 
-main{padding:12px 12px calc(24px + env(safe-area-inset-bottom))}
+main{padding:12px 12px calc(24px + env(safe-area-inset-bottom));max-width:var(--w);margin:0 auto}
 .pane{display:none}
 .pane.on{display:block}
 
 /* ---------- 卡片 ---------- */
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin:0 0 9px}
 .card h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
 .tag{font-size:11px;font-weight:400;color:var(--accent);background:#0d2c44;border-radius:6px;padding:1px 6px}
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0}
