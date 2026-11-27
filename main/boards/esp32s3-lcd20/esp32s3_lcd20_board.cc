@@ -183,37 +183,7 @@ private:
                     if (bl) {
                         bl->SetBrightness(100, true);
                     }
-                } else if (phase >= 10 && (phase - 10) % 2 == 0) {
-                    /* LED 自检：直接用 led_strip 驱动 WS2812，红 → 绿 → 蓝 → 灭，每 2 秒一档 */
-                    static led_strip_handle_t diag_strip = nullptr;
-                    if (diag_strip == nullptr) {
-                        led_strip_config_t cfg = {};
-                        cfg.strip_gpio_num = BUILTIN_LED_GPIO;
-                        cfg.max_leds = 1;
-                        cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
-                        cfg.led_model = LED_MODEL_WS2812;
-                        led_strip_rmt_config_t rmt = {};
-                        rmt.resolution_hz = 10 * 1000 * 1000;
-                        esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &diag_strip);
-                        ESP_LOGW(TAG, "DIAG LED: create strip on GPIO%d -> %s", BUILTIN_LED_GPIO,
-                                 esp_err_to_name(err));
-                    }
-                    if (diag_strip != nullptr) {
-                        const int step = ((phase - 10) / 2) % 4;
-                        if (step == 3) {
-                            led_strip_clear(diag_strip);
-                        } else {
-                            const uint8_t rgb[3][3] = {{64, 0, 0}, {0, 64, 0}, {0, 0, 64}};
-                            led_strip_set_pixel(diag_strip, 0, rgb[step][0], rgb[step][1], rgb[step][2]);
-                            esp_err_t err = led_strip_refresh(diag_strip);
-                            if (err != ESP_OK) {
-                                ESP_LOGW(TAG, "DIAG LED refresh failed: %s", esp_err_to_name(err));
-                            }
-                        }
-                        ESP_LOGW(TAG, "DIAG LED -> %s", step == 0 ? "RED" : step == 1 ? "GREEN" : step == 2 ? "BLUE" : "OFF");
-                    }
-                }
-                if (phase >= 10) {
+                } else if (phase >= 10) {
                     int i = (phase - 10) / 3 % 4;
                     ESP_LOGW(TAG, "DIAG 5/5: screen bg -> %s (color #%d)", names[i], i);
                     if (display != nullptr) {
@@ -241,9 +211,34 @@ private:
     }
 #endif
 
+    /* 板载 WS2812 已从功能中移除。WS2812 会一直保持最后一次收到的颜色，
+     * 所以在开机时发一帧全 0 把它熄掉，然后释放引脚，之后任何代码都不再驱动它。 */
+    static void ClearOnboardWs2812Once() {
+        if (BUILTIN_LED_GPIO == GPIO_NUM_NC) {
+            return;
+        }
+        led_strip_config_t cfg = {};
+        cfg.strip_gpio_num = BUILTIN_LED_GPIO;
+        cfg.max_leds = 1;
+        cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
+        cfg.led_model = LED_MODEL_WS2812;
+        led_strip_rmt_config_t rmt = {};
+        rmt.resolution_hz = 10 * 1000 * 1000;
+        led_strip_handle_t strip = nullptr;
+        esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &strip);
+        if (err == ESP_OK && strip != nullptr) {
+            led_strip_clear(strip);
+            led_strip_del(strip);
+            ESP_LOGI(TAG, "onboard WS2812 cleared and released (GPIO%d)", BUILTIN_LED_GPIO);
+        } else {
+            ESP_LOGW(TAG, "onboard WS2812 clear failed: %s", esp_err_to_name(err));
+        }
+    }
+
 public:
     Esp32S3Lcd20Board() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeSpi();
+        ClearOnboardWs2812Once();   /* 开机把板载 WS2812 熄掉，之后不再驱动 */
         InitializeLcdDisplay();
         InitializeButtons();
         InitializeTools();
@@ -256,8 +251,10 @@ public:
 #endif
     }
 
+    /* 板载 WS2812 已从功能中移除（见 docs/lcd20/S21-※）：返回 NoLed，
+     * 任何 Led 调用都是空操作，也不会去占用 GPIO48 的 RMT 通道 */
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static NoLed led;
         return &led;
     }
 

@@ -19,20 +19,8 @@ SingleLed::SingleLed(gpio_num_t gpio) {
         return;
     }
 
-    led_strip_config_t strip_config = {};
-    strip_config.strip_gpio_num = gpio;
-    strip_config.max_leds = 1;
-    strip_config.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
-    strip_config.led_model = LED_MODEL_WS2812;
-
-    led_strip_rmt_config_t rmt_config = {};
-    rmt_config.resolution_hz = 10 * 1000 * 1000; // 10MHz
-
-    esp_err_t strip_err = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_);
-    ESP_LOGW(TAG, "WS2812 strip on GPIO%d: %s (handle=%p)", (int)gpio, esp_err_to_name(strip_err),
-             (void*)led_strip_);
-    ESP_ERROR_CHECK(strip_err);
-    led_strip_clear(led_strip_);
+    gpio_num_ = gpio;
+    CreateStrip();
 
     {
         Settings settings("led", false);
@@ -73,6 +61,36 @@ SingleLed::SingleLed(gpio_num_t gpio) {
         .skip_unhandled_events = false,
     };
     ESP_ERROR_CHECK(esp_timer_create(&blink_timer_args, &blink_timer_));
+}
+
+bool SingleLed::CreateStrip() {
+    if (led_strip_ != nullptr) {
+        led_strip_del(led_strip_);
+        led_strip_ = nullptr;
+    }
+    led_strip_config_t strip_config = {};
+    strip_config.strip_gpio_num = gpio_num_;
+    strip_config.max_leds = 1;
+    strip_config.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
+    strip_config.led_model = LED_MODEL_WS2812;
+    led_strip_rmt_config_t rmt_config = {};
+    rmt_config.resolution_hz = 10 * 1000 * 1000;
+    esp_err_t err = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_);
+    ESP_LOGW(TAG, "WS2812 strip on GPIO%d: %s (handle=%p)", (int)gpio_num_, esp_err_to_name(err),
+             (void*)led_strip_);
+    if (err != ESP_OK) {
+        led_strip_ = nullptr;
+        return false;
+    }
+    led_strip_clear(led_strip_);
+    return true;
+}
+
+void SingleLed::Reinit() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ESP_LOGW(TAG, "reinit strip (GPIO%d)", (int)gpio_num_);
+    CreateStrip();
+    ApplyMode();
 }
 
 SingleLed::~SingleLed() {

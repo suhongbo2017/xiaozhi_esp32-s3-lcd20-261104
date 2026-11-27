@@ -35,6 +35,9 @@ public:
     virtual void SetStatusEnabled(bool enabled) { (void)enabled; }
     virtual bool StatusEnabled() const { return true; }
     virtual void SetColor(uint8_t r, uint8_t g, uint8_t b) { (void)r; (void)g; (void)b; }
+    /** 重新初始化底层驱动（诊断接口临时占用引脚后，用它把驱动接回来） */
+    virtual void Reinit() {}
+
     virtual void TurnOn() {}
     virtual void TurnOff() {}
 };

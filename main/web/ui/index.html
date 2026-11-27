@@ -20,7 +20,7 @@
   <button class="on" data-tab="screen">屏幕<small>主题 亮度 聊天</small></button>
   <button data-tab="pic">图片<small>开机图 背景 字体</small></button>
   <button data-tab="audio">声音<small>音量 唤醒词</small></button>
-  <button data-tab="ctrl">控制<small>状态灯 开关</small></button>
+  <button data-tab="ctrl">控制<small>我的开关</small></button>
   <button data-tab="sys">系统<small>服务 诊断</small></button>
 </nav>
 
@@ -159,21 +159,6 @@
 
 <!-- ================= 控制 ================= -->
 <section class="pane" id="pane-ctrl">
-  <div class="card">
-    <h2>状态灯</h2>
-    <div class="row"><label>模式</label>
-      <select id="led_mode">
-        <option value="on">跟随设备状态</option>
-        <option value="off">常灭</option>
-        <option value="color">固定颜色</option>
-      </select>
-    </div>
-    <div class="row"><label>固定颜色</label><input type="color" id="led_color" value="#00b3ff"></div>
-    <details class="note"><summary>说明</summary>
-      <div class="note-body">跟随状态：空闲灭 / 聆听红 / 说话绿。固定颜色：任何状态变化都保持该颜色。常灭：一直不亮。</div>
-    </details>
-  </div>
-
   <div class="card">
     <h2>我的开关 <span class="tag" id="gpio_count"></span></h2>
     <div id="gpio_list"></div>

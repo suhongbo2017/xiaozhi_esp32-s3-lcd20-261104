@@ -30,6 +30,7 @@ public:
     void SetColor(uint8_t r, uint8_t g, uint8_t b) override;
     void TurnOn() override;
     void TurnOff() override;
+    void Reinit() override;
 
 private:
     Mode mode_ = Mode::Follow;      /* 当前模式 */
@@ -38,6 +39,7 @@ private:
     uint8_t fixed_g_ = 0;
     uint8_t fixed_b_ = 0;
     std::mutex mutex_;
+    gpio_num_t gpio_num_ = GPIO_NUM_NC;
     TaskHandle_t blink_task_ = nullptr;
     led_strip_handle_t led_strip_ = nullptr;
     uint8_t r_ = 0, g_ = 0, b_ = 0;
@@ -45,6 +47,7 @@ private:
     int blink_interval_ms_ = 0;
     esp_timer_handle_t blink_timer_ = nullptr;
 
+    bool CreateStrip();             /* 创建 RMT 设备并接管 GPIO */
     void ApplyMode();               /* 按当前模式立刻刷新输出 */
     void SaveMode();                /* 写 NVS */
     void StartBlinkTask(int times, int interval_ms);

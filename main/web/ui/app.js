@@ -104,10 +104,6 @@ function render(s) {
   $('wtv').textContent = ((s.wake_threshold ?? 50) / 100).toFixed(2);
   $('ww_name').textContent = s.wake_words || '';
 
-  /* 控制 */
-  $('led_mode').value = s.led_mode || 'on';
-  if (s.led_color) $('led_color').value = s.led_color;
-
   /* 系统 */
   if (s.api) $('api').value = s.api;
   renderStatusKV(s);
@@ -224,8 +220,6 @@ $('standby_city').onchange = (e) => queueSave({ standby_city: e.target.value.tri
 $('standby_symbols').onchange = (e) => { queueSave({ standby_symbols: e.target.value.trim() }); S.standby_symbols = e.target.value; renderMock(S); };
 $('wake_on').onchange = (e) => queueSave({ wake_enabled: e.target.checked ? 1 : 0 }, { delay: 0 });
 $('wake_threshold').oninput = (e) => { $('wtv').textContent = ((+e.target.value) / 100).toFixed(2); queueSave({ wake_threshold: +e.target.value }); };
-$('led_mode').onchange = (e) => queueSave({ led_mode: e.target.value }, { delay: 0 });
-$('led_color').onchange = (e) => queueSave({ led_color: e.target.value }, { delay: 0 });
 $('api').onchange = (e) => queueSave({ api: e.target.value.trim() }, { delay: 0 });
 
 /* ---------------- 图片 ---------------- */

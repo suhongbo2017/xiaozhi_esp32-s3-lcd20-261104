@@ -17,7 +17,6 @@
 #include <cJSON.h>
 #include <esp_http_server.h>
 #include <driver/gpio.h>
-#include <led_strip.h>
 #include <esp_partition.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
@@ -66,7 +65,6 @@ std::string BuildStatusJson() {
     auto& board = Board::GetInstance();
     Settings ui("ui", false);
     Settings music("music", false);
-    Settings led_settings("led", false);
 
     auto* display = board.GetDisplay();
     std::string theme = "dark";
@@ -91,28 +89,7 @@ std::string BuildStatusJson() {
     cJSON_AddNumberToObject(root, "volume", volume);
     cJSON_AddNumberToObject(root, "duck", music.GetInt("duck_volume_percent", CONFIG_MUSIC_DUCK_VOLUME_PERCENT));
     cJSON_AddStringToObject(root, "api", music.GetString("api_url", CONFIG_MUSIC_API_URL).c_str());
-    /* 状态灯：以 Led 对象为准（NVS 只是持久化副本） */
-    const char* led_mode_str = "on";
-    char led_color_hex[8] = "#00b3ff";
-    if (auto* led = board.GetLed()) {
-        switch (led->GetMode()) {
-            case Led::Mode::Off:
-                led_mode_str = "off";
-                break;
-            case Led::Mode::Fixed:
-                led_mode_str = "color";
-                break;
-            default:
-                led_mode_str = "on";
-                break;
-        }
-        uint8_t lr = 0, lg = 0, lb = 255;
-        led->GetFixedColor(&lr, &lg, &lb);
-        snprintf(led_color_hex, sizeof(led_color_hex), "#%02X%02X%02X", lr, lg, lb);
-    }
-    cJSON_AddNumberToObject(root, "chat_style", Settings("ui", false).GetInt("chat_style", 0));
-    cJSON_AddStringToObject(root, "led_mode", led_mode_str);
-    cJSON_AddStringToObject(root, "led_color", led_color_hex);
+    cJSON_AddBoolToObject(root, "led_supported", false);   /* 板载 WS2812 已从功能中移除 */
     auto& app = Application::GetInstance();
     cJSON_AddNumberToObject(root, "wake_enabled", app.WakeWordEnabled() ? 1 : 0);
     cJSON_AddNumberToObject(root, "wake_threshold", (int)(app.WakeWordThreshold() * 100 + 0.5f));
@@ -346,165 +323,6 @@ esp_err_t HandleMcpTools(httpd_req_t* req) {
         cJSON_AddItemToArray(arr, cJSON_CreateString(name.c_str()));
     }
     cJSON_AddNumberToObject(root, "count", cJSON_GetArraySize(arr));
-    char* out = cJSON_PrintUnformatted(root);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
-    cJSON_free(out);
-    cJSON_Delete(root);
-    return ESP_OK;
-}
-
-/* 诊断：直接用 led_strip 驱动指定 GPIO 上的 WS2812，绕过 SingleLed
- * POST /api/led/probe?pin=48&r=64&g=0&b=0   （默认绿色）
- */
-esp_err_t HandleLedProbe(httpd_req_t* req) {
-    char query[128] = {0};
-    if (httpd_req_get_url_query_len(req) > 0) {
-        httpd_req_get_url_query_str(req, query, sizeof(query));
-    }
-    auto get_int = [&query](const char* key, int def) {
-        char val[16] = {0};
-        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) {
-            return def;
-        }
-        return atoi(val);
-    };
-    const int pin = get_int("pin", 48);
-    const int r = get_int("r", 0), g = get_int("g", 64), b = get_int("b", 0);
-
-    led_strip_config_t cfg = {};
-    cfg.strip_gpio_num = static_cast<gpio_num_t>(pin);
-    cfg.max_leds = 1;
-    cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
-    cfg.led_model = LED_MODEL_WS2812;
-    led_strip_rmt_config_t rmt = {};
-    rmt.resolution_hz = 10 * 1000 * 1000;
-    led_strip_handle_t strip = nullptr;
-    esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &strip);
-    esp_err_t set_err = ESP_FAIL, ref_err = ESP_FAIL;
-    if (err == ESP_OK && strip != nullptr) {
-        set_err = led_strip_set_pixel(strip, 0, r, g, b);
-        ref_err = led_strip_refresh(strip);
-    }
-    ESP_LOGW(TAG, "led probe GPIO%d rgb=(%d,%d,%d) new=%s set=%s refresh=%s", pin, r, g, b,
-             esp_err_to_name(err), esp_err_to_name(set_err), esp_err_to_name(ref_err));
-    if (strip != nullptr) {
-        led_strip_del(strip);
-    }
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", err == ESP_OK && ref_err == ESP_OK);
-    cJSON_AddNumberToObject(root, "pin", pin);
-    cJSON_AddStringToObject(root, "new", esp_err_to_name(err));
-    cJSON_AddStringToObject(root, "set", esp_err_to_name(set_err));
-    cJSON_AddStringToObject(root, "refresh", esp_err_to_name(ref_err));
-    char* out = cJSON_PrintUnformatted(root);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
-    cJSON_free(out);
-    cJSON_Delete(root);
-    return ESP_OK;
-}
-
-/* 诊断：在指定 GPIO 上闪 N 次（每次 120ms），用于"数闪几下"定位真实 LED 引脚
- * POST /api/led/blink?pin=48&count=3
- */
-esp_err_t HandleLedBlink(httpd_req_t* req) {
-    char query[128] = {0};
-    if (httpd_req_get_url_query_len(req) > 0) {
-        httpd_req_get_url_query_str(req, query, sizeof(query));
-    }
-    auto get_int = [&query](const char* key, int def) {
-        char val[16] = {0};
-        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) {
-            return def;
-        }
-        return atoi(val);
-    };
-    const int pin = get_int("pin", 48);
-    const int count = get_int("count", 1);
-
-    led_strip_config_t cfg = {};
-    cfg.strip_gpio_num = static_cast<gpio_num_t>(pin);
-    cfg.max_leds = 1;
-    cfg.color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB;
-    cfg.led_model = LED_MODEL_WS2812;
-    led_strip_rmt_config_t rmt = {};
-    rmt.resolution_hz = 10 * 1000 * 1000;
-    led_strip_handle_t strip = nullptr;
-    esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &strip);
-    int done = 0;
-    if (err == ESP_OK && strip != nullptr) {
-        for (int i = 0; i < count; i++) {
-            led_strip_set_pixel(strip, 0, 96, 96, 96);   /* 白色，够亮 */
-            led_strip_refresh(strip);
-            vTaskDelay(pdMS_TO_TICKS(160));
-            led_strip_clear(strip);
-            vTaskDelay(pdMS_TO_TICKS(160));
-            done++;
-        }
-        led_strip_del(strip);
-    }
-    ESP_LOGW(TAG, "led blink GPIO%d x%d (err=%s)", pin, done, esp_err_to_name(err));
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
-    cJSON_AddNumberToObject(root, "pin", pin);
-    cJSON_AddNumberToObject(root, "blinks", done);
-    char* out = cJSON_PrintUnformatted(root);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
-    cJSON_free(out);
-    cJSON_Delete(root);
-    return ESP_OK;
-}
-
-/* 诊断：把某个引脚当"普通 GPIO"输出电平（测试是否其实是单色 LED / 继电器）
- * POST /api/led/gpio?pin=18&level=1&ms=3000
- */
-esp_err_t HandleLedGpio(httpd_req_t* req) {
-    char query[128] = {0};
-    if (httpd_req_get_url_query_len(req) > 0) {
-        httpd_req_get_url_query_str(req, query, sizeof(query));
-    }
-    auto get_int = [&query](const char* key, int def) {
-        char val[16] = {0};
-        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) {
-            return def;
-        }
-        return atoi(val);
-    };
-    const int pin = get_int("pin", 18);
-    const int level = get_int("level", 1) ? 1 : 0;
-    int ms = get_int("ms", 3000);
-    if (ms < 100) {
-        ms = 100;
-    }
-    if (ms > 15000) {
-        ms = 15000;
-    }
-
-    gpio_config_t cfg = {};
-    cfg.pin_bit_mask = 1ULL << pin;
-    cfg.mode = GPIO_MODE_INPUT_OUTPUT;
-    cfg.pull_up_en = GPIO_PULLUP_DISABLE;
-    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    cfg.intr_type = GPIO_INTR_DISABLE;
-    esp_err_t err = gpio_config(&cfg);
-    if (err == ESP_OK) {
-        gpio_set_level(static_cast<gpio_num_t>(pin), level);
-    }
-    ESP_LOGW(TAG, "led gpio test: pin=%d level=%d ms=%d err=%s", pin, level, ms,
-             esp_err_to_name(err));
-    vTaskDelay(pdMS_TO_TICKS(ms));
-    if (err == ESP_OK) {
-        gpio_set_level(static_cast<gpio_num_t>(pin), level ? 0 : 1);
-        vTaskDelay(pdMS_TO_TICKS(300));
-        gpio_reset_pin(static_cast<gpio_num_t>(pin));
-    }
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
-    cJSON_AddNumberToObject(root, "pin", pin);
-    cJSON_AddNumberToObject(root, "level", level);
-    cJSON_AddNumberToObject(root, "ms", ms);
     char* out = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, out != nullptr ? out : "{}");
@@ -772,27 +590,6 @@ esp_err_t HandleSettings(httpd_req_t* req) {
         ESP_LOGI(TAG, "chat style -> %d", idx);
     }
 
-    auto* led_color = cJSON_GetObjectItem(root, "led_color");
-    if (auto* led = board.GetLed()) {
-        /* 先同步固定颜色，再切模式；两边都由 Led 自己写 NVS，避免键不一致 */
-        if (cJSON_IsString(led_color)) {
-            uint8_t r = 0, g = 0, b = 255;
-            HexToRgb(led_color->valuestring, &r, &g, &b);
-            led->SetFixedColor(r, g, b);
-        }
-        if (cJSON_IsString(led_mode)) {
-            std::string mode = led_mode->valuestring;
-            if (mode == "off") {
-                led->SetMode(Led::Mode::Off);
-            } else if (mode == "color") {
-                led->SetMode(Led::Mode::Fixed);
-            } else {
-                led->SetMode(Led::Mode::Follow);
-            }
-            ESP_LOGI(TAG, "led -> %s (mode=%d)", mode.c_str(), (int)led->GetMode());
-        }
-    }
-
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -825,9 +622,6 @@ bool AdminServer::Start() {
     httpd_uri_t uri_assets = {.uri = "/api/assets", .method = HTTP_POST, .handler = HandleAssetsApply, .user_ctx = nullptr};
     httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
     httpd_uri_t uri_chat_test = {.uri = "/api/chat_test", .method = HTTP_POST, .handler = HandleChatTest, .user_ctx = nullptr};
-    httpd_uri_t uri_led_gpio = {.uri = "/api/led/gpio", .method = HTTP_POST, .handler = HandleLedGpio, .user_ctx = nullptr};
-    httpd_uri_t uri_led_blink = {.uri = "/api/led/blink", .method = HTTP_POST, .handler = HandleLedBlink, .user_ctx = nullptr};
-    httpd_uri_t uri_led_probe = {.uri = "/api/led/probe", .method = HTTP_POST, .handler = HandleLedProbe, .user_ctx = nullptr};
     httpd_uri_t uri_mcp_tools = {.uri = "/api/mcp_tools", .method = HTTP_GET, .handler = HandleMcpTools, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_get = {.uri = "/api/gpio", .method = HTTP_GET, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_post = {.uri = "/api/gpio", .method = HTTP_POST, .handler = HandleGpio, .user_ctx = nullptr};
@@ -847,9 +641,6 @@ bool AdminServer::Start() {
     reg(&uri_assets);
     reg(&uri_reboot);
     reg(&uri_chat_test);
-    reg(&uri_led_gpio);
-    reg(&uri_led_blink);
-    reg(&uri_led_probe);
     reg(&uri_mcp_tools);
     reg(&uri_gpio_get);
     reg(&uri_gpio_post);
