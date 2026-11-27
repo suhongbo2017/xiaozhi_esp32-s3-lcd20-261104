@@ -241,12 +241,21 @@ private:
         led_strip_handle_t strip = nullptr;
         esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &strip);
         if (err == ESP_OK && strip != nullptr) {
-            led_strip_clear(strip);
+            led_strip_clear(strip);   /* 发一帧全 0：把灯熄掉（内部会阻塞等到发送完成） */
             led_strip_del(strip);
-            ESP_LOGI(TAG, "onboard WS2812 cleared and released (GPIO%d)", BUILTIN_LED_GPIO);
+            ESP_LOGI(TAG, "onboard WS2812 cleared (GPIO%d)", BUILTIN_LED_GPIO);
         } else {
             ESP_LOGW(TAG, "onboard WS2812 clear failed: %s", esp_err_to_name(err));
         }
+
+        /* 关键：把数据脚"钉死"在低电平。
+         * RMT 通道删掉后 GPIO 会变成悬空输入，而 WS2812 只要在数据线上收到
+         * 符合时序的电平跳变就会锁存颜色 —— 屏 SPI(40MHz)/八线 PSRAM/WiFi 的
+         * 噪声会让它随机点亮。恒低电平 = "没有数据"，灯不会再被误触发。 */
+        gpio_reset_pin(BUILTIN_LED_GPIO);
+        gpio_set_direction(BUILTIN_LED_GPIO, GPIO_MODE_OUTPUT);
+        gpio_set_level(BUILTIN_LED_GPIO, 0);
+        ESP_LOGI(TAG, "onboard WS2812 data pin parked LOW (GPIO%d)", BUILTIN_LED_GPIO);
     }
 
 public:

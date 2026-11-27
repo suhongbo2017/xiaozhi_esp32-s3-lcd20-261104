@@ -6,6 +6,7 @@
 #include "mcp_server.h"
 #include "asset_ota.h"
 #include "ui/qr_page.h"
+#include "web/log_buffer.h"
 #include "ui/standby_service.h"
 #include "ui/user_image.h"
 #include "board.h"
@@ -90,7 +91,12 @@ std::string BuildStatusJson() {
     cJSON_AddNumberToObject(root, "volume", volume);
     cJSON_AddNumberToObject(root, "duck", music.GetInt("duck_volume_percent", CONFIG_MUSIC_DUCK_VOLUME_PERCENT));
     cJSON_AddStringToObject(root, "api", music.GetString("api_url", CONFIG_MUSIC_API_URL).c_str());
-    cJSON_AddBoolToObject(root, "led_supported", false);   /* 板载 WS2812 已从功能中移除 */
+    cJSON_AddBoolToObject(root, "led_supported", false);
+    static const char* reset_names[] = {"unknown", "power_on", "ext", "sw", "panic", "int_wdt",
+                                        "task_wdt", "wdt", "deepsleep", "brownout", "sdio"};
+    const int rr = (int)esp_reset_reason();
+    cJSON_AddStringToObject(root, "last_reset",
+                            (rr >= 0 && rr <= 10) ? reset_names[rr] : "unknown");   /* 板载 WS2812 已从功能中移除 */
     auto& app = Application::GetInstance();
     cJSON_AddNumberToObject(root, "wake_enabled", app.WakeWordEnabled() ? 1 : 0);
     cJSON_AddNumberToObject(root, "wake_threshold", (int)(app.WakeWordThreshold() * 100 + 0.5f));
@@ -316,6 +322,26 @@ esp_err_t HandleImagePost(httpd_req_t* req) {
  * POST /api/gpio  {"devices":[{name,gpio,active_high,initial_on}]}  保存配置
  * POST /api/gpio  {"name":"打印机灯光","state":"on|off|toggle"}      即时控制
  */
+/* 诊断：最近日志（纯文本），USB 串口失效时用网页取 */
+esp_err_t HandleLog(httpd_req_t* req) {
+    char query[64] = {0};
+    int n = 120;
+    if (httpd_req_get_url_query_len(req) > 0) {
+        httpd_req_get_url_query_str(req, query, sizeof(query));
+        char val[16] = {0};
+        if (httpd_query_key_value(query, "n", val, sizeof(val)) == ESP_OK) {
+            n = atoi(val);
+        }
+    }
+    if (n <= 0 || n > 500) {
+        n = 120;
+    }
+    std::string text = LogBuffer::Tail(n);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, text.c_str(), text.size());
+}
+
 /* 诊断：当前注册给大模型的 MCP 工具列表 */
 esp_err_t HandleMcpTools(httpd_req_t* req) {
     cJSON* root = cJSON_CreateObject();
@@ -652,6 +678,7 @@ bool AdminServer::Start() {
     httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
     httpd_uri_t uri_chat_test = {.uri = "/api/chat_test", .method = HTTP_POST, .handler = HandleChatTest, .user_ctx = nullptr};
     httpd_uri_t uri_mcp_tools = {.uri = "/api/mcp_tools", .method = HTTP_GET, .handler = HandleMcpTools, .user_ctx = nullptr};
+    httpd_uri_t uri_log = {.uri = "/api/log", .method = HTTP_GET, .handler = HandleLog, .user_ctx = nullptr};
     httpd_uri_t uri_qr = {.uri = "/api/qr", .method = HTTP_POST, .handler = HandleQr, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_get = {.uri = "/api/gpio", .method = HTTP_GET, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_post = {.uri = "/api/gpio", .method = HTTP_POST, .handler = HandleGpio, .user_ctx = nullptr};
@@ -672,6 +699,7 @@ bool AdminServer::Start() {
     reg(&uri_reboot);
     reg(&uri_chat_test);
     reg(&uri_mcp_tools);
+    reg(&uri_log);
     reg(&uri_qr);
     reg(&uri_gpio_get);
     reg(&uri_gpio_post);

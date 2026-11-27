@@ -116,7 +116,7 @@ function renderStatusKV(s) {
     ['板型', s.board], ['固件', s.version], ['MAC', s.mac],
     ['主题', s.theme], ['亮度', s.brightness], ['音量', s.volume],
     ['唤醒词', s.wake_words || '-'], ['聊天样式', STYLES[s.chat_style ?? 0]?.name || '-'],
-    ['指数', s.standby_symbols], ['服务', s.api],
+    ['指数', s.standby_symbols], ['服务', s.api], ['上次重启', s.last_reset],
   ];
   $('status_kv').innerHTML = rows
     .map(([k, v]) => `<div class="k">${k}</div><div class="v">${v ?? '-'}</div>`).join('');
@@ -509,6 +509,22 @@ async function showTools() {
     const r = await fetch('/api/mcp_tools', { cache: 'no-store' });
     const j = await r.json();
     box.innerHTML = `<b>共 ${j.count} 个工具</b><br>` + (j.tools || []).join('<br>');
+  } catch (e) { box.textContent = '失败：' + e; }
+}
+
+async function showLog() {
+  const box = $('diag');
+  box.textContent = '读取中…';
+  try {
+    const r = await fetch('/api/log?n=120', { cache: 'no-store' });
+    const text = await r.text();
+    box.innerHTML = '';
+    const pre = document.createElement('div');
+    pre.style.whiteSpace = 'pre-wrap';
+    pre.style.fontSize = '10px';
+    pre.style.lineHeight = '1.35';
+    pre.textContent = text || '（日志为空）';
+    box.appendChild(pre);
   } catch (e) { box.textContent = '失败：' + e; }
 }
 
