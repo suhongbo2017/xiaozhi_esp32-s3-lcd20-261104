@@ -229,6 +229,21 @@ struct QrMcpRegistrar {
                 }
                 return std::string("二维码已显示在屏幕上，用手机扫一扫就能打开设置页");
             });
+
+        McpServer::GetInstance().AddTool(
+            "self.screen.hide_qrcode",
+            "关闭设备屏幕上的二维码，回到正常界面（待机页/对话页）。"
+            "当用户说「关闭二维码」「关掉二维码」「把二维码收起来」「不看了」时调用本工具。"
+            "Hide the QR code on screen and go back to the normal UI.",
+            PropertyList(),
+            [](const PropertyList&) -> ReturnValue {
+                auto& qr = QrPage::GetInstance();
+                if (!qr.visible()) {
+                    return std::string("屏幕上没有二维码");
+                }
+                qr.Hide();
+                return std::string("二维码已关闭");
+            });
     }
 };
 }  // namespace
