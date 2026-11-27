@@ -131,7 +131,7 @@ bool QrPage::Show(Display* display, const std::string& url, int seconds) {
         lv_obj_set_style_pad_all(root_, 0, 0);
         lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-        qr_ = lv_canvas_create(root_);
+        qr_ = lv_image_create(root_);
         lv_obj_align(qr_, LV_ALIGN_TOP_MID, 0, 12);
 
         url_label_ = lv_label_create(root_);
@@ -149,7 +149,18 @@ bool QrPage::Show(Display* display, const std::string& url, int seconds) {
 
     int modules = 0;
     RenderToBuffer(target, &modules);
-    lv_canvas_set_buffer(qr_, g_pixels, kQrSize, kQrSize, LV_COLOR_FORMAT_RGB565);
+
+    /* 直接把 RGB565 缓冲包成 image descriptor（和待机背景图同一套做法，稳定） */
+    static lv_image_dsc_t dsc = {};
+    dsc = {};
+    dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    dsc.header.w = kQrSize;
+    dsc.header.h = kQrSize;
+    dsc.data_size = kQrSize * kQrSize * 2;
+    dsc.data = g_pixels;
+    lv_image_set_src(qr_, &dsc);
+    lv_obj_align(qr_, LV_ALIGN_TOP_MID, 0, 12);
     lv_obj_invalidate(qr_);
     lv_label_set_text(url_label_, target.c_str());
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
@@ -205,8 +216,11 @@ struct QrMcpRegistrar {
     QrMcpRegistrar() {
         McpServer::GetInstance().AddTool(
             "self.screen.show_qrcode",
-            "Show a QR code on the device screen which opens the device's web settings page. "
-            "Use it when the user asks how to open the settings page, or asks for a QR code.",
+            "在设备屏幕上显示一个二维码，手机扫一下就能打开设备的网页设置页面"
+            "（http://设备IP:8080/）。"
+            "当用户说「显示二维码」「二维码」「怎么设置」「怎么修改设置」「设置页面在哪」"
+            "「手机怎么连」「扫个码」时调用本工具。"
+            "Show a QR code on the screen that opens the device's web settings page.",
             PropertyList(),
             [](const PropertyList&) -> ReturnValue {
                 auto* display = Board::GetInstance().GetDisplay();
