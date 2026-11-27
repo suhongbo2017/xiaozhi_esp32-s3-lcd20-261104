@@ -83,11 +83,7 @@ QrPage& QrPage::GetInstance() {
 }
 
 bool QrPage::visible() const {
-#ifdef HAVE_LVGL
-    return root_ != nullptr;
-#else
-    return false;
-#endif
+    return shown_;
 }
 
 #ifdef HAVE_LVGL
@@ -165,6 +161,7 @@ bool QrPage::Show(Display* display, const std::string& url, int seconds) {
     lv_label_set_text(url_label_, target.c_str());
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(root_);
+    shown_ = true;
 
     if (g_hide_timer == nullptr) {
         esp_timer_create_args_t args = {};
@@ -195,6 +192,7 @@ void QrPage::Hide() {
         DisplayLockGuard lock(display_);
         lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
     }
+    shown_ = false;
     ESP_LOGI(TAG, "QR page hidden");
 }
 

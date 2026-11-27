@@ -37,6 +37,7 @@ private:
     QrPage() = default;
 
     Display* display_ = nullptr;
+    bool shown_ = false;      /* 真正可见（Hide 只是加 HIDDEN 标志，不能用 root_!=nullptr 判断） */
     int hide_timer_s_ = 0;
 #ifdef HAVE_LVGL
     lv_obj_t* root_ = nullptr;
