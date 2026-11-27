@@ -1,6 +1,7 @@
 #include "standby_service.h"
 
 #include "standby_page.h"
+#include "qr_page.h"
 #include "user_image.h"
 
 #include "lvgl_theme.h"
@@ -177,7 +178,9 @@ void StandbyService::Tick() {
         const uint32_t now_s = static_cast<uint32_t>(esp_log_timestamp() / 1000);
 
         /* 只在"空闲 + 已启用 + 没在放音乐"时显示 */
-        const bool want = enabled_.load() && idle_.load() && !MusicPlayer::GetInstance().playing();
+        /* 二维码页显示时让位（否则待机页会把它盖住） */
+        const bool want = enabled_.load() && idle_.load() && !MusicPlayer::GetInstance().playing() &&
+                          !QrPage::GetInstance().visible();
 
         if (dirty_.exchange(false) || want != g_page->visible()) {
             ESP_LOGI(TAG, "standby want=%d (enabled=%d idle=%d playing=%d)", (int)want,

@@ -5,6 +5,7 @@
 #include "device/gpio_control.h"
 #include "mcp_server.h"
 #include "asset_ota.h"
+#include "ui/qr_page.h"
 #include "ui/standby_service.h"
 #include "ui/user_image.h"
 #include "board.h"
@@ -331,6 +332,34 @@ esp_err_t HandleMcpTools(httpd_req_t* req) {
     return ESP_OK;
 }
 
+/* 把管理页地址以二维码形式显示到设备屏幕
+ * POST /api/qr?seconds=60
+ */
+esp_err_t HandleQr(httpd_req_t* req) {
+    char query[64] = {0};
+    int seconds = 60;
+    if (httpd_req_get_url_query_len(req) > 0) {
+        httpd_req_get_url_query_str(req, query, sizeof(query));
+        char val[16] = {0};
+        if (httpd_query_key_value(query, "seconds", val, sizeof(val)) == ESP_OK) {
+            seconds = atoi(val);
+        }
+    }
+    auto* display = Board::GetInstance().GetDisplay();
+    bool ok = QrPage::GetInstance().Show(display, "", seconds);
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", ok);
+    if (!ok) {
+        cJSON_AddStringToObject(root, "error", "no_ip");
+    }
+    char* out = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out != nullptr ? out : "{}");
+    cJSON_free(out);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
 esp_err_t HandleGpio(httpd_req_t* req) {
     auto& gpio = GpioControl::GetInstance();
     httpd_resp_set_type(req, "application/json");
@@ -623,6 +652,7 @@ bool AdminServer::Start() {
     httpd_uri_t uri_reboot = {.uri = "/api/reboot", .method = HTTP_POST, .handler = HandleReboot, .user_ctx = nullptr};
     httpd_uri_t uri_chat_test = {.uri = "/api/chat_test", .method = HTTP_POST, .handler = HandleChatTest, .user_ctx = nullptr};
     httpd_uri_t uri_mcp_tools = {.uri = "/api/mcp_tools", .method = HTTP_GET, .handler = HandleMcpTools, .user_ctx = nullptr};
+    httpd_uri_t uri_qr = {.uri = "/api/qr", .method = HTTP_POST, .handler = HandleQr, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_get = {.uri = "/api/gpio", .method = HTTP_GET, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_gpio_post = {.uri = "/api/gpio", .method = HTTP_POST, .handler = HandleGpio, .user_ctx = nullptr};
     httpd_uri_t uri_image_get = {.uri = "/api/image", .method = HTTP_GET, .handler = HandleImageGet, .user_ctx = nullptr};
@@ -642,6 +672,7 @@ bool AdminServer::Start() {
     reg(&uri_reboot);
     reg(&uri_chat_test);
     reg(&uri_mcp_tools);
+    reg(&uri_qr);
     reg(&uri_gpio_get);
     reg(&uri_gpio_post);
     reg(&uri_image_get);

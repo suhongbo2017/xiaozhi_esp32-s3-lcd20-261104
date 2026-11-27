@@ -20,6 +20,7 @@
 #include "config.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include "ui/qr_page.h"
 #include <led_strip.h>
 #include "music/music_player.h"
 
@@ -107,6 +108,19 @@ private:
                 return;
             }
             app.ToggleChatState();
+        });
+        /* 双击 BOOT：把管理页地址显示成二维码（手机扫一扫打开设置页） */
+        boot_button_.OnDoubleClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
+                return;
+            }
+            auto* qr = &QrPage::GetInstance();
+            if (qr->visible()) {
+                qr->Hide();
+            } else {
+                qr->Show(GetDisplay(), "", 120);
+            }
         });
         boot_button_.OnLongPress([this]() {
             if (MusicPlayer::GetInstance().playing()) {

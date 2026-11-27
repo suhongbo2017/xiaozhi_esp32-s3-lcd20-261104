@@ -9,6 +9,8 @@
 #include "market/stock_tools.h"
 #include "ui/standby_service.h"
 #include "ui/user_image.h"
+
+void QrPageRegisterMcpTool();
 #include "web/admin_server.h"
 #include "music/music_player.h"
 #include "mqtt_protocol.h"
@@ -168,6 +170,9 @@ void Application::Initialize() {
     GpioControl::GetInstance().Initialize();
     GpioControl::GetInstance().RegisterMcpTools();
     GpioControl::GetInstance().RebuildPerDeviceTools();
+
+    /* 二维码：把管理页地址显示到屏幕（微信/相机扫一扫） */
+    QrPageRegisterMcpTool();
 
     /* 设备管理网页（8080）：主题/亮度/音量/灯/音乐服务地址
      * 注意：httpd_start 需要 lwIP 已初始化，必须等网络连上后再启动 */

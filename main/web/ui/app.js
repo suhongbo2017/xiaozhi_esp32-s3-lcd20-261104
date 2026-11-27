@@ -487,6 +487,14 @@ function delConfirm() {
 }
 
 /* ---------------- 诊断 & 系统 ---------------- */
+async function showQr() {
+  try {
+    const r = await fetch('/api/qr?seconds=120', { method: 'POST' });
+    const j = await r.json();
+    toast(j.ok ? '二维码已显示在设备屏幕上（2 分钟后自动消失）' : '失败：设备还没拿到 IP', !j.ok);
+  } catch (e) { toast('失败：' + e, true); }
+}
+
 async function chatTest() {
   try {
     await fetch('/api/chat_test', { method: 'POST' });
